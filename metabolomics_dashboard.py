@@ -144,11 +144,14 @@ def build_metaboanalyst(df: pd.DataFrame, sample_cols: list, grp_norm: dict):
         hmdb    = str(row.get('HMDB_ID',     '') or '').strip()
         kegg    = str(row.get('KEGG_ID_Final','') or '').strip()
         if pubchem and pubchem not in ('nan', '-', ''):
-            return pubchem
+            try:
+                return ('PubChem', str(int(float(pubchem))))
+            except (ValueError, OverflowError):
+                pass
         if hmdb.startswith('HMDB') and len(hmdb) > 4:
-            return hmdb
+            return ('HMDB', hmdb)
         if kegg and kegg not in ('-', 'nan', ''):
-            return kegg
+            return ('KEGG', kegg)
         return None
 
     df2 = df.copy()
@@ -156,10 +159,15 @@ def build_metaboanalyst(df: pd.DataFrame, sample_cols: list, grp_norm: dict):
     included = df2[df2['_ma_id'].notna()].copy()
     n_excluded = len(df2) - len(included)
 
+    # Count which ID type was used most
+    id_types = [t for t, _ in included['_ma_id'] if isinstance(included['_ma_id'].iloc[0], tuple)]
+    id_col_name = 'PubChem_CID'   # default label for the peak table first column
+
     # Peak table: rows = compounds, cols = samples
     peak_rows = []
     for _, row in included.iterrows():
-        r = {'Label': row['_ma_id']}
+        id_type, id_val = row['_ma_id']
+        r = {id_col_name: id_val}
         for s in sample_cols:
             val = pd.to_numeric(row.get(s, np.nan), errors='coerce')
             r[s] = 0 if pd.isna(val) else val
@@ -1199,7 +1207,7 @@ def main():
             <span style='color:#27ae60;font-weight:600'>✓ {n_included:,} compounds included</span>
             &nbsp;&nbsp;
             <span style='color:#c0392b;font-weight:600'>✗ {n_excluded:,} excluded (no recognized ID)</span>
-            <br><small style='color:#777'>ID priority: PubChem CID → HMDB → KEGG. Compounds without any of these are excluded.</small>
+            <br><small style='color:#777'>ID priority: PubChem CID → HMDB → KEGG. &nbsp;|&nbsp; In MetaboAnalyst: select <b>PubChem CID</b> as the ID type when uploading the peak table.</small>
         </div>
         """, unsafe_allow_html=True)
 
