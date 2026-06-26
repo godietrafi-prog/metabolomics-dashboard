@@ -287,6 +287,31 @@ def load_group_map():
     return mapping
 
 
+@st.cache_data(show_spinner=False)
+def load_clinical_bmi():
+    """Return dict {sample_col: bmi_percentile} from clinical file."""
+    wb = openpyxl.load_workbook(CLINICAL_FILE, read_only=True)
+    ws = wb['ALL_data']
+    headers = [str(h).strip() if h else '' for h in
+               next(ws.iter_rows(min_row=1, max_row=1, values_only=True))]
+    try:
+        col_code = headers.index('code')
+        col_bmi  = headers.index('bmi_precentage')
+    except ValueError:
+        return {}
+    result = {}
+    for row in ws.iter_rows(min_row=2, values_only=True):
+        code = row[col_code]
+        bmi_pct = row[col_bmi]
+        if code:
+            col = code_to_col(code)
+            try:
+                result[col] = float(bmi_pct) if bmi_pct is not None else None
+            except (ValueError, TypeError):
+                result[col] = None
+    return result
+
+
 @st.cache_data(show_spinner="Parsing insights file…")
 def load_insights(path: str):
     wb = openpyxl.load_workbook(path, read_only=True)
@@ -372,6 +397,52 @@ def main():
     grp_norm     = {k: ("ADHD" if v == "ADHD" else "Control") for k, v in group_map.items()}
     adhd_cols    = [c for c in sample_cols if grp_norm.get(c) == "ADHD"]
     control_cols = [c for c in sample_cols if grp_norm.get(c) == "Control"]
+
+    # ── Sidebar: Sample Exclusion (needs sample list → must come after data load) ─
+    bmi_map = load_clinical_bmi()
+    with st.sidebar:
+        st.divider()
+        st.header("🚫 Sample Exclusion")
+
+        _bmi_pct_thresh = st.slider(
+            "Auto-exclude: BMI percentile above",
+            min_value=50, max_value=100, value=100, step=1,
+            help="Samples above this BMI percentile are suggested for exclusion. "
+                 "You can still adjust manually below."
+        )
+
+        def _sample_label(s):
+            grp = grp_norm.get(s, '?')
+            bmi = bmi_map.get(s)
+            bmi_str = f"  BMI%={bmi:.0f}" if bmi is not None else ""
+            return f"{s} ({grp}){bmi_str}"
+
+        _auto_excl = sorted([
+            s for s in sample_cols
+            if bmi_map.get(s) is not None and bmi_map[s] > _bmi_pct_thresh
+        ])
+        _excluded = st.multiselect(
+            "Excluded samples",
+            options=sorted(sample_cols),
+            default=_auto_excl,
+            format_func=_sample_label,
+            help="Samples removed from ALL statistical calculations. "
+                 "Adjust the BMI slider above to auto-populate, or select manually."
+        )
+
+    _excl_set    = set(_excluded)
+    adhd_cols    = [c for c in adhd_cols    if c not in _excl_set]
+    control_cols = [c for c in control_cols if c not in _excl_set]
+
+    if _excl_set:
+        n_excl_adhd = sum(1 for c in _excl_set if grp_norm.get(c) == "ADHD")
+        n_excl_ctrl = sum(1 for c in _excl_set if grp_norm.get(c) == "Control")
+        with st.sidebar:
+            st.caption(
+                f"Excluding {len(_excl_set)} sample(s): "
+                f"{n_excl_adhd} ADHD · {n_excl_ctrl} Control. "
+                f"Remaining: {len(adhd_cols)} ADHD · {len(control_cols)} Control."
+            )
 
     fc_col   = 'Log2 Fold Change: (Control) / (ADHD)'
     pval_col = 'P-value: (Control) / (ADHD)'
