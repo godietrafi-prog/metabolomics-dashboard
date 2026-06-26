@@ -130,6 +130,71 @@ def to_excel(df: pd.DataFrame) -> bytes:
     return buf.getvalue()
 
 
+# ─── Compound deduplication ────────────────────────────────────────────────────
+
+def _compound_key(df: pd.DataFrame) -> pd.Series:
+    """Canonical per-compound key: InChIKey_Final > PubChem_CID > lowercase name.
+    Ensures different adducts or name-variants of the same molecule count once."""
+    def _key(row):
+        ink = str(row.get('InChIKey_Final') or '').strip()
+        if ink and ink not in ('nan', '-', ''):
+            return ink
+        pc = str(row.get('PubChem_CID') or '').strip()
+        if pc and pc not in ('nan', '-', ''):
+            try:
+                return f'pc:{int(float(pc))}'
+            except (ValueError, OverflowError):
+                pass
+        return f'name:{str(row.get("Original_Name") or "").strip().lower()}'
+    return df.apply(_key, axis=1)
+
+
+def dedup_compounds(df: pd.DataFrame, pval_col: str) -> pd.DataFrame:
+    """Keep one row per unique compound (the most-significant adduct).
+    Works for any Compound Discoverer export regardless of naming conventions."""
+    df = df.copy()
+    df['_ckey'] = _compound_key(df)
+    return (df.sort_values(pval_col, na_position='last')
+              .drop_duplicates(subset=['_ckey'])
+              .drop(columns=['_ckey']))
+
+
+# ─── Statistical recalculation ─────────────────────────────────────────────────
+
+@st.cache_data(show_spinner="Recalculating statistics…")
+def recalculate_pvalues(path: str, adhd_cols: tuple, ctrl_cols: tuple,
+                        fc_col: str, test_name: str):
+    """Recalculate Log2FC and p-values from raw sample intensities.
+    Cached by file path + test choice, so switching tests is instant on repeat."""
+    from scipy import stats as sp
+    df = load_insights(path)
+    a_mat = df[list(adhd_cols)].apply(pd.to_numeric, errors='coerce').values
+    b_mat = df[list(ctrl_cols)].apply(pd.to_numeric, errors='coerce').values
+
+    a_mean = np.nanmean(a_mat, axis=1)
+    b_mean = np.nanmean(b_mat, axis=1)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        log2fc = np.log2(np.where(a_mean > 0, b_mean / a_mean, np.nan))
+
+    pvals = np.full(len(df), np.nan)
+    for i in range(len(df)):
+        a = a_mat[i][~np.isnan(a_mat[i])]
+        b = b_mat[i][~np.isnan(b_mat[i])]
+        if len(a) < 2 or len(b) < 2:
+            continue
+        try:
+            if test_name == "Welch's t-test":
+                _, pvals[i] = sp.ttest_ind(a, b, equal_var=False)
+            elif test_name == "Student's t-test":
+                _, pvals[i] = sp.ttest_ind(a, b, equal_var=True)
+            elif test_name == "Mann-Whitney U":
+                _, pvals[i] = sp.mannwhitneyu(a, b, alternative='two-sided')
+        except Exception:
+            pass
+
+    return log2fc.tolist(), pvals.tolist()
+
+
 def export_cols(df: pd.DataFrame, name_col: str, fc_col: str, pval_col: str, direction: bool = True) -> list:
     """Return available export columns from EXPORT_BASE + stats, present in df."""
     stat_cols = [fc_col, pval_col, '_direction'] if direction else []
@@ -257,7 +322,7 @@ def main():
         <p>Untargeted Metabolomics Analysis · Tel-Hai Nutrition &amp; Bioinformatics Lab</p>
     </div>""", unsafe_allow_html=True)
 
-    # ── Sidebar ──────────────────────────────────────────────────────────────
+    # ── Sidebar Part 1: Data Source + Filters (before data load) ─────────────
     with st.sidebar:
         st.header("📂 Data Source")
         uploaded = st.file_uploader("Upload Insights XLSX", type=["xlsx"])
@@ -271,14 +336,33 @@ def main():
             st.info("Default: ALLCompounds_ADHD_2026_insight.xlsx")
 
         st.divider()
+        st.header("📐 Statistical Test")
+        _TEST_OPTS = {
+            "original": "Original — from Compound Discoverer file",
+            "welch":    "Welch's t-test  ✦ recommended",
+            "student":  "Student's t-test",
+            "mann":     "Mann-Whitney U  (non-parametric)",
+        }
+        _test_key = st.radio(
+            "p-values used for this analysis",
+            list(_TEST_OPTS.keys()),
+            format_func=lambda k: _TEST_OPTS[k],
+            index=0,
+        )
+        st.caption(
+            "Welch's t-test: robust for unequal variances between groups. "
+            "Mann-Whitney U: better when n<10 per group or distribution is skewed. "
+            "'Original' uses Compound Discoverer export as-is (typically t-test, "
+            "exact variant depends on CD method settings)."
+        )
+
+        st.divider()
         st.header("🔬 Statistical Filters")
         fc_thresh   = st.slider("|Log₂ FC| threshold", 0.0, 4.0, 1.0, 0.25)
         pval_thresh = st.selectbox("P-value threshold",
                                    [1.0, 0.5, 0.1, 0.05, 0.01, 0.001], index=3,
                                    format_func=lambda v: "Any (no filter)" if v == 1.0 else str(v))
         show_adj    = st.checkbox("Use adjusted p-value (FDR)", value=False)
-        st.divider()
-        st.caption("Tel-Hai College · Nutrition Lab · 2026")
 
     # ── Load data ────────────────────────────────────────────────────────────
     group_map   = load_group_map()
@@ -292,8 +376,32 @@ def main():
     fc_col   = 'Log2 Fold Change: (Control) / (ADHD)'
     pval_col = 'P-value: (Control) / (ADHD)'
     adjp_col = 'Adj. P-value: (Control) / (ADHD)'
-    p_use    = adjp_col if show_adj else pval_col
     name_col = 'Name' if 'Name' in df.columns else 'Original_Name'
+
+    # ── Apply statistical test choice ─────────────────────────────────────────
+    _TEST_NAME_MAP = {
+        "welch":   "Welch's t-test",
+        "student": "Student's t-test",
+        "mann":    "Mann-Whitney U",
+    }
+    active_test_name = _TEST_NAME_MAP.get(_test_key)  # None = use original
+    if active_test_name and adhd_cols and control_cols:
+        _new_fc, _new_pv = recalculate_pvalues(
+            insights_path, tuple(adhd_cols), tuple(control_cols),
+            fc_col, active_test_name)
+        df = df.copy()
+        df[fc_col]   = _new_fc
+        df[pval_col] = _new_pv
+        df[adjp_col] = np.nan  # FDR not recalculated; disable to avoid stale values
+    elif active_test_name and not (adhd_cols and control_cols):
+        st.warning("No sample columns detected in this file — cannot recalculate. "
+                   "Using original p-values from Compound Discoverer.")
+        active_test_name = None
+
+    p_use    = adjp_col if (show_adj and active_test_name is None) else pval_col
+    if show_adj and active_test_name:
+        st.info("Adjusted p-values (FDR) are unavailable when using a recalculated test. "
+                "Showing raw p-values.")
 
     for col in [fc_col, pval_col, adjp_col, 'OC_Ratio', 'NOSC']:
         if col in df.columns:
@@ -311,6 +419,7 @@ def main():
     _m = re.search(r'\(([^)]+)\)\s*/\s*\(([^)]+)\)', fc_col)
     group_b_name = _m.group(1) if _m else "Group B"   # Control
     group_a_name = _m.group(2) if _m else "Group A"   # ADHD
+    _test_display = active_test_name if active_test_name else "Compound Discoverer (original)"
     st.markdown(
         f"<div style='background:#f0f7ff;border-left:4px solid #0f3460;"
         f"padding:0.6rem 1.2rem;border-radius:6px;margin-bottom:1rem;"
@@ -319,9 +428,21 @@ def main():
         f"<b>{len(df):,}</b> compounds &nbsp;·&nbsp; "
         f"<b>{len(sample_cols)}</b> samples "
         f"({len(adhd_cols)} {group_a_name} · {len(control_cols)} {group_b_name})"
+        f" &nbsp;·&nbsp; <b>Test:</b> {_test_display}"
         f"</div>",
         unsafe_allow_html=True
     )
+
+    # ── Sidebar footer ────────────────────────────────────────────────────────
+    with st.sidebar:
+        st.divider()
+        n_a, n_b = len(adhd_cols), len(control_cols)
+        if n_a > 0 and n_b > 0:
+            if min(n_a, n_b) < 10:
+                st.info(f"n={min(n_a,n_b)} per group — consider Mann-Whitney U")
+            elif min(n_a, n_b) < 20:
+                st.info(f"n={min(n_a,n_b)} per group — Welch's t-test recommended")
+        st.caption("Tel-Hai College · Nutrition Lab · 2026")
 
     # ── TABS ─────────────────────────────────────────────────────────────────
     tabs = st.tabs([
@@ -640,12 +761,7 @@ def main():
     # ═════════════════════════════════════════════════════════════════════════
     with tabs[3]:
         kegg_df = df[df['KEGG_Pathways'].notna() & (df['KEGG_Pathways'] != '-')].copy()
-        # Deduplicate: keep most-significant row per compound name (case-insensitive)
-        # so header counts match the displayed unique compound lists
-        kegg_df['_name_key'] = kegg_df['Original_Name'].str.strip().str.lower()
-        kegg_df = (kegg_df.sort_values(pval_col, na_position='last')
-                           .drop_duplicates(subset=['_name_key'])
-                           .drop(columns=['_name_key']))
+        kegg_df = dedup_compounds(kegg_df, pval_col)
         st.markdown(f"### {len(kegg_df):,} compounds mapped to KEGG pathways")
 
         path_all  = Counter()
@@ -773,10 +889,7 @@ def main():
     # ═════════════════════════════════════════════════════════════════════════
     with tabs[4]:
         neuro_df = df[df['Neuro_Trap'].notna() & (df['Neuro_Trap'] != '-')].copy()
-        neuro_df['_name_key'] = neuro_df['Original_Name'].str.strip().str.lower()
-        neuro_df = (neuro_df.sort_values(pval_col, na_position='last')
-                            .drop_duplicates(subset=['_name_key'])
-                            .drop(columns=['_name_key']))
+        neuro_df = dedup_compounds(neuro_df, pval_col)
         st.markdown(f"### {len(neuro_df):,} neuro-active compounds detected")
 
         neuro_ctr = Counter()
