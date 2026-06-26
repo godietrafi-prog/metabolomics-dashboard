@@ -383,10 +383,13 @@ def main():
 
         st.divider()
         st.header("🔬 Statistical Filters")
-        fc_thresh   = st.slider("|Log₂ FC| threshold", 0.0, 4.0, 1.0, 0.25)
+        fc_thresh   = st.slider("|Log₂ FC| threshold", 0.0, 4.0, 0.1, 0.1,
+                                help="Thesis original: 0.1 (essentially any change). "
+                                     "Set higher to focus on large-effect compounds.")
         pval_thresh = st.selectbox("P-value threshold",
-                                   [1.0, 0.5, 0.1, 0.05, 0.01, 0.001], index=3,
-                                   format_func=lambda v: "Any (no filter)" if v == 1.0 else str(v))
+                                   [1.0, 0.5, 0.1, 0.05, 0.01, 0.001], index=4,
+                                   format_func=lambda v: "Any (no filter)" if v == 1.0
+                                   else (f"{v}  ✦ thesis" if v == 0.01 else str(v)))
         show_adj    = st.checkbox("Use adjusted p-value (FDR)", value=False)
 
     # ── Load data ────────────────────────────────────────────────────────────
@@ -406,10 +409,10 @@ def main():
 
         _bmi_range = st.slider(
             "Include BMI percentile range",
-            min_value=0, max_value=100, value=(5, 85), step=1,
+            min_value=0, max_value=100, value=(0, 100), step=1,
             help="Samples outside this range are suggested for exclusion. "
-                 "Default (5–85) matches the original thesis exclusion criteria. "
-                 "You can still adjust manually below."
+                 "Default: all samples included (0–100), matching the original thesis. "
+                 "Set to 5–85 to exclude obesity/underweight outliers (CDC criteria)."
         )
 
         def _sample_label(s):
