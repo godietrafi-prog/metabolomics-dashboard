@@ -319,7 +319,7 @@ def main():
     st.markdown("""
     <div class="main-header">
         <h1>⚗️ Metabolomics Dashboard</h1>
-        <p>Untargeted Metabolomics Analysis · Tel-Hai Nutrition &amp; Bioinformatics Lab</p>
+        <p>Untargeted Metabolomics Analysis · Tel-Hai University – Analytical Infrastructures</p>
     </div>""", unsafe_allow_html=True)
 
     # ── Sidebar Part 1: Data Source + Filters (before data load) ─────────────
