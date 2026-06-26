@@ -640,9 +640,12 @@ def main():
     # ═════════════════════════════════════════════════════════════════════════
     with tabs[3]:
         kegg_df = df[df['KEGG_Pathways'].notna() & (df['KEGG_Pathways'] != '-')].copy()
-        # Deduplicate: keep most-significant row per compound so counts match the displayed lists
+        # Deduplicate: keep most-significant row per compound name (case-insensitive)
+        # so header counts match the displayed unique compound lists
+        kegg_df['_name_key'] = kegg_df['Original_Name'].str.strip().str.lower()
         kegg_df = (kegg_df.sort_values(pval_col, na_position='last')
-                           .drop_duplicates(subset=['Original_Name']))
+                           .drop_duplicates(subset=['_name_key'])
+                           .drop(columns=['_name_key']))
         st.markdown(f"### {len(kegg_df):,} compounds mapped to KEGG pathways")
 
         path_all  = Counter()
@@ -770,8 +773,10 @@ def main():
     # ═════════════════════════════════════════════════════════════════════════
     with tabs[4]:
         neuro_df = df[df['Neuro_Trap'].notna() & (df['Neuro_Trap'] != '-')].copy()
+        neuro_df['_name_key'] = neuro_df['Original_Name'].str.strip().str.lower()
         neuro_df = (neuro_df.sort_values(pval_col, na_position='last')
-                            .drop_duplicates(subset=['Original_Name']))
+                            .drop_duplicates(subset=['_name_key'])
+                            .drop(columns=['_name_key']))
         st.markdown(f"### {len(neuro_df):,} neuro-active compounds detected")
 
         neuro_ctr = Counter()
