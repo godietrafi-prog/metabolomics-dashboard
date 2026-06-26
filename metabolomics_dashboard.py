@@ -338,10 +338,10 @@ def main():
         st.divider()
         st.header("📐 Statistical Test")
         _TEST_OPTS = {
-            "original": "Original — from Compound Discoverer file",
             "welch":    "Welch's t-test  ✦ recommended",
             "student":  "Student's t-test",
             "mann":     "Mann-Whitney U  (non-parametric)",
+            "original": "Original — Compound Discoverer (not recommended)",
         }
         _test_key = st.radio(
             "p-values used for this analysis",
@@ -350,10 +350,10 @@ def main():
             index=0,
         )
         st.caption(
-            "Welch's t-test: robust for unequal variances between groups. "
-            "Mann-Whitney U: better when n<10 per group or distribution is skewed. "
-            "'Original' uses Compound Discoverer export as-is (typically t-test, "
-            "exact variant depends on CD method settings)."
+            "Welch's t-test: robust for unequal variances — recommended for most metabolomics datasets. "
+            "Mann-Whitney U: non-parametric, better when n<10 per group or distribution is heavily skewed. "
+            "'Original (CD)' uses p-values exported directly from Compound Discoverer; "
+            "the exact test variant depends on method settings and is often opaque."
         )
 
         st.divider()
