@@ -640,6 +640,9 @@ def main():
     # ═════════════════════════════════════════════════════════════════════════
     with tabs[3]:
         kegg_df = df[df['KEGG_Pathways'].notna() & (df['KEGG_Pathways'] != '-')].copy()
+        # Deduplicate: keep most-significant row per compound so counts match the displayed lists
+        kegg_df = (kegg_df.sort_values(pval_col, na_position='last')
+                           .drop_duplicates(subset=['Original_Name']))
         st.markdown(f"### {len(kegg_df):,} compounds mapped to KEGG pathways")
 
         path_all  = Counter()
@@ -767,6 +770,8 @@ def main():
     # ═════════════════════════════════════════════════════════════════════════
     with tabs[4]:
         neuro_df = df[df['Neuro_Trap'].notna() & (df['Neuro_Trap'] != '-')].copy()
+        neuro_df = (neuro_df.sort_values(pval_col, na_position='last')
+                            .drop_duplicates(subset=['Original_Name']))
         st.markdown(f"### {len(neuro_df):,} neuro-active compounds detected")
 
         neuro_ctr = Counter()
@@ -832,9 +837,12 @@ def main():
 
                 ea, ec = st.columns(2)
                 ea.markdown("<span class='badge-adhd'>↑ ADHD compounds</span>", unsafe_allow_html=True)
-                ea.write(list(adhd_up[name_col].dropna().unique()))
+                ea.write(list(adhd_up[name_col].dropna().unique()) or ["—"])
                 ec.markdown("<span class='badge-ctrl'>↑ Control compounds</span>", unsafe_allow_html=True)
-                ec.write(list(ctrl_up[name_col].dropna().unique()))
+                ec.write(list(ctrl_up[name_col].dropna().unique()) or ["—"])
+
+                st.markdown("**All compounds in this axis:**")
+                st.write(list(axis_df[name_col].dropna().unique()))
 
                 ax_ecols = export_cols(axis_df, name_col, fc_col, pval_col)
                 ax_export = axis_df[ax_ecols].rename(
