@@ -404,10 +404,11 @@ def main():
         st.divider()
         st.header("🚫 Sample Exclusion")
 
-        _bmi_pct_thresh = st.slider(
-            "Auto-exclude: BMI percentile above",
-            min_value=50, max_value=100, value=100, step=1,
-            help="Samples above this BMI percentile are suggested for exclusion. "
+        _bmi_range = st.slider(
+            "Include BMI percentile range",
+            min_value=0, max_value=100, value=(5, 85), step=1,
+            help="Samples outside this range are suggested for exclusion. "
+                 "Default (5–85) matches the original thesis exclusion criteria. "
                  "You can still adjust manually below."
         )
 
@@ -417,9 +418,11 @@ def main():
             bmi_str = f"  BMI%={bmi:.0f}" if bmi is not None else ""
             return f"{s} ({grp}){bmi_str}"
 
+        _bmi_lo, _bmi_hi = _bmi_range
         _auto_excl = sorted([
             s for s in sample_cols
-            if bmi_map.get(s) is not None and bmi_map[s] > _bmi_pct_thresh
+            if bmi_map.get(s) is not None
+            and (bmi_map[s] < _bmi_lo or bmi_map[s] > _bmi_hi)
         ])
         _excluded = st.multiselect(
             "Excluded samples",
