@@ -22,8 +22,8 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 
 # ─── Page config ──────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="ADHD Metabolomics Dashboard",
-    page_icon="🧬",
+    page_title="Metabolomics Dashboard",
+    page_icon="⚗️",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -140,8 +140,11 @@ def export_cols(df: pd.DataFrame, name_col: str, fc_col: str, pval_col: str, dir
 def build_metaboanalyst(df: pd.DataFrame, sample_cols: list, grp_norm: dict):
     """Build MetaboAnalyst peak table and metadata DataFrames."""
     def best_id(row):
-        hmdb = str(row.get('HMDB_ID', '') or '')
-        kegg = str(row.get('KEGG_ID_Final', '') or '')
+        pubchem = str(row.get('PubChem_CID', '') or '').strip()
+        hmdb    = str(row.get('HMDB_ID',     '') or '').strip()
+        kegg    = str(row.get('KEGG_ID_Final','') or '').strip()
+        if pubchem and pubchem not in ('nan', '-', ''):
+            return pubchem
         if hmdb.startswith('HMDB') and len(hmdb) > 4:
             return hmdb
         if kegg and kegg not in ('-', 'nan', ''):
@@ -242,8 +245,8 @@ def apply_template(fig):
 def main():
     st.markdown("""
     <div class="main-header">
-        <h1>🧬 ADHD Metabolomics Dashboard</h1>
-        <p>ALLCompounds · ADHD vs Control · Tel-Hai Nutrition &amp; Bioinformatics Lab</p>
+        <h1>⚗️ Metabolomics Dashboard</h1>
+        <p>Untargeted Metabolomics Analysis · Tel-Hai Nutrition &amp; Bioinformatics Lab</p>
     </div>""", unsafe_allow_html=True)
 
     # ── Sidebar ──────────────────────────────────────────────────────────────
@@ -296,6 +299,22 @@ def main():
             and r.get(p_use, 1) < pval_thresh)
         else 'n/s', axis=1)
 
+    # ── Project banner — group names extracted from column name ───────────────
+    _m = re.search(r'\(([^)]+)\)\s*/\s*\(([^)]+)\)', fc_col)
+    group_b_name = _m.group(1) if _m else "Group B"   # Control
+    group_a_name = _m.group(2) if _m else "Group A"   # ADHD
+    st.markdown(
+        f"<div style='background:#f0f7ff;border-left:4px solid #0f3460;"
+        f"padding:0.6rem 1.2rem;border-radius:6px;margin-bottom:1rem;"
+        f"font-size:0.95rem;color:#1a1a2e'>"
+        f"<b>Study:</b> {group_a_name} vs {group_b_name} &nbsp;·&nbsp; "
+        f"<b>{len(df):,}</b> compounds &nbsp;·&nbsp; "
+        f"<b>{len(sample_cols)}</b> samples "
+        f"({len(adhd_cols)} {group_a_name} · {len(control_cols)} {group_b_name})"
+        f"</div>",
+        unsafe_allow_html=True
+    )
+
     # ── TABS ─────────────────────────────────────────────────────────────────
     tabs = st.tabs([
         "📊 Overview",
@@ -303,7 +322,7 @@ def main():
         "⚡ Oxidation",
         "🗺 KEGG Pathways",
         "🧠 Neurochemistry",
-        "📈 ADHD vs Control",
+        f"📈 {group_a_name} vs {group_b_name}",
         "🔍 Compound Explorer",
         "📥 Downloads & Exports",
     ])
@@ -1174,13 +1193,13 @@ def main():
             <div class='export-box-title'>MetaboAnalyst Ready Files</div>
             <div class='export-box-desc'>
                 Two files are required for MetaboAnalyst statistical analysis:<br>
-                <b>Peak Table</b> — rows = compounds (with HMDB/KEGG ID), columns = samples<br>
+                <b>Peak Table</b> — rows = compounds (with PubChem/HMDB/KEGG ID), columns = samples<br>
                 <b>Metadata</b> — sample names with group labels
             </div>
             <span style='color:#27ae60;font-weight:600'>✓ {n_included:,} compounds included</span>
             &nbsp;&nbsp;
-            <span style='color:#c0392b;font-weight:600'>✗ {n_excluded:,} excluded (no HMDB/KEGG ID)</span>
-            <br><small style='color:#777'>ID priority: HMDB → KEGG ID. Compounds without either are excluded from MA export.</small>
+            <span style='color:#c0392b;font-weight:600'>✗ {n_excluded:,} excluded (no recognized ID)</span>
+            <br><small style='color:#777'>ID priority: PubChem CID → HMDB → KEGG. Compounds without any of these are excluded.</small>
         </div>
         """, unsafe_allow_html=True)
 
