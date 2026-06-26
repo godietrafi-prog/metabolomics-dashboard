@@ -408,8 +408,8 @@ def main():
             df[col] = pd.to_numeric(df[col], errors='coerce')
 
     df['_direction'] = df.apply(
-        lambda r: ('↑ ADHD' if r.get(fc_col, np.nan) < -fc_thresh
-                   else ('↑ Control' if r.get(fc_col, np.nan) > fc_thresh else 'n/s'))
+        lambda r: ('↑ in ADHD' if r.get(fc_col, np.nan) < -fc_thresh
+                   else ('↓ in ADHD' if r.get(fc_col, np.nan) > fc_thresh else 'n/s'))
         if (pd.notna(r.get(fc_col)) and pd.notna(r.get(p_use))
             and abs(r.get(fc_col, 0)) >= fc_thresh
             and r.get(p_use, 1) < pval_thresh)
@@ -460,8 +460,8 @@ def main():
     # TAB 1 — OVERVIEW
     # ═════════════════════════════════════════════════════════════════════════
     with tabs[0]:
-        n_sig_adhd = int((df['_direction'] == '↑ ADHD').sum())
-        n_sig_ctrl = int((df['_direction'] == '↑ Control').sum())
+        n_sig_adhd = int((df['_direction'] == '↑ in ADHD').sum())
+        n_sig_ctrl = int((df['_direction'] == '↓ in ADHD').sum())
 
         metrics = [
             (len(df),                                          "Total Compounds"),
@@ -588,32 +588,32 @@ def main():
             if sub_class in ('-','Unknown') or not sub_class: continue
             sub_df = lipid_df[lipid_df['LM_Sub_Class'] == sub_class]
             short  = re.sub(r'\s*\[.*?\]','', sub_class)
-            n_adhd_up = int((sub_df['_direction'] == '↑ ADHD').sum())
-            n_ctrl_up = int((sub_df['_direction'] == '↑ Control').sum())
+            n_adhd_up = int((sub_df['_direction'] == '↑ in ADHD').sum())
+            n_ctrl_up = int((sub_df['_direction'] == '↓ in ADHD').sum())
             n_ns      = count - n_adhd_up - n_ctrl_up
             med_fc    = sub_df[fc_col].median() if fc_col in sub_df.columns else np.nan
             with st.expander(f"**{short}** — {count} compounds"):
                 g1, g2 = st.columns(2)
                 with g1:
                     st.markdown("**Directional compound counts:**")
-                    st.markdown(f"<span class='badge-adhd'>↑ ADHD: {n_adhd_up}</span>&nbsp;&nbsp;"
-                                f"<span class='badge-ctrl'>↑ Control: {n_ctrl_up}</span>&nbsp;&nbsp;"
+                    st.markdown(f"<span class='badge-adhd'>↑ in ADHD: {n_adhd_up}</span>&nbsp;&nbsp;"
+                                f"<span class='badge-ctrl'>↓ in ADHD: {n_ctrl_up}</span>&nbsp;&nbsp;"
                                 f"<span style='background:#888;color:white;padding:3px 8px;border-radius:12px;"
                                 f"font-size:0.85rem;font-weight:600'>n/s: {n_ns}</span>",
                                 unsafe_allow_html=True)
                     if np.isfinite(med_fc):
-                        direction = "↑ Control" if med_fc > 0 else "↑ ADHD"
+                        direction = "↓ in ADHD" if med_fc > 0 else "↑ in ADHD"
                         st.metric("Median Log₂FC (Control/ADHD)", f"{med_fc:+.2f}",
                                   help=f"Positive = higher in Control. {direction}")
                     if n_adhd_up > 0 or n_ctrl_up > 0:
                         mini = pd.DataFrame({
-                            'Group': ['↑ ADHD','↑ Control'],
+                            'Group': ['↑ in ADHD','↓ in ADHD'],
                             'Count': [-n_adhd_up, n_ctrl_up],
                         })
                         fig_mini = px.bar(mini, x='Count', y='Group', orientation='h',
                                           color='Group',
-                                          color_discrete_map={'↑ ADHD':COLORS['ADHD'],
-                                                              '↑ Control':COLORS['Control']},
+                                          color_discrete_map={'↑ in ADHD':COLORS['ADHD'],
+                                                              '↓ in ADHD':COLORS['Control']},
                                           title='Significant compounds')
                         fig_mini.update_layout(showlegend=False, height=120,
                                                margin=dict(t=30,b=5,l=5,r=5),
@@ -704,17 +704,17 @@ def main():
         st.markdown("<div class='section-header'>High-Oxidation Compounds (O/C > 0.6) — ADHD vs Control</div>",
                     unsafe_allow_html=True)
         high_ox = oc_df[oc_df['OC_Ratio'] > 0.6].copy()
-        n_hox_adhd = int((high_ox['_direction'] == '↑ ADHD').sum())
-        n_hox_ctrl = int((high_ox['_direction'] == '↑ Control').sum())
+        n_hox_adhd = int((high_ox['_direction'] == '↑ in ADHD').sum())
+        n_hox_ctrl = int((high_ox['_direction'] == '↓ in ADHD').sum())
         n_hox_ns   = len(high_ox) - n_hox_adhd - n_hox_ctrl
 
         hox_c1, hox_c2, hox_c3 = st.columns(3)
         hox_c1.markdown(f"""<div class="metric-card">
             <div class="value" style="color:#c0392b">{n_hox_adhd}</div>
-            <div class="label">↑ ADHD (sig.)</div></div>""", unsafe_allow_html=True)
+            <div class="label">↑ in ADHD (sig.)</div></div>""", unsafe_allow_html=True)
         hox_c2.markdown(f"""<div class="metric-card">
             <div class="value" style="color:#1a6ea8">{n_hox_ctrl}</div>
-            <div class="label">↑ Control (sig.)</div></div>""", unsafe_allow_html=True)
+            <div class="label">↓ in ADHD (sig.)</div></div>""", unsafe_allow_html=True)
         hox_c3.markdown(f"""<div class="metric-card">
             <div class="value" style="color:#555">{n_hox_ns}</div>
             <div class="label">Not significant</div></div>""", unsafe_allow_html=True)
@@ -722,7 +722,7 @@ def main():
         hox_fc = high_ox[high_ox[fc_col].notna() & high_ox[pval_col].notna()].copy()
         hox_fc = hox_fc.drop_duplicates(subset=[name_col]).nlargest(30, 'OC_Ratio')
         hox_fc['label_color'] = hox_fc['_direction'].map(
-            {'↑ ADHD': COLORS['ADHD'], '↑ Control': COLORS['Control'], 'n/s': '#aaa'})
+            {'↑ in ADHD': COLORS['ADHD'], '↓ in ADHD': COLORS['Control'], 'n/s': '#aaa'})
         hox_fc_sorted = hox_fc.sort_values(fc_col)
         fig_hox = go.Figure(go.Bar(
             x=hox_fc_sorted[fc_col], y=hox_fc_sorted[name_col], orientation='h',
@@ -790,7 +790,7 @@ def main():
                 'ADHD_n':    [path_adhd[p] for p in selected_paths],
                 'Control_n': [path_ctrl[p] for p in selected_paths],
                 'Total':     [path_all[p]  for p in selected_paths],
-            }).sort_values('ADHD_n')
+            }).sort_values('Control_n')   # sort by ↓ in ADHD count (dominant story)
 
             bar_h = max(28, min(48, 600 // max(len(pw_df), 1)))
             fig_h = max(420, len(pw_df) * bar_h + 160)
@@ -798,26 +798,28 @@ def main():
             fc_label = f"|FC|≥{fc_thresh}" if fc_thresh > 0 else "any FC"
 
             fig_mirror = go.Figure()
+            # LEFT = Downregulated in ADHD (blue) — matches paper convention
             fig_mirror.add_trace(go.Bar(
-                name='↑ ADHD', x=[-n for n in pw_df['ADHD_n']], y=pw_df['Pathway'],
-                orientation='h', marker=dict(color=COLORS['ADHD'], line=dict(color='white', width=0.8)),
-                customdata=pw_df['ADHD_n'].values,
-                hovertemplate='<b>%{y}</b><br>↑ ADHD: <b>%{customdata}</b><extra></extra>',
-                text=[str(n) if n > 0 else '' for n in pw_df['ADHD_n']],
-                textposition='inside', textfont=dict(size=13, color='white'), insidetextanchor='middle',
-            ))
-            fig_mirror.add_trace(go.Bar(
-                name='↑ Control', x=pw_df['Control_n'], y=pw_df['Pathway'],
+                name='↓ in ADHD', x=[-n for n in pw_df['Control_n']], y=pw_df['Pathway'],
                 orientation='h', marker=dict(color=COLORS['Control'], line=dict(color='white', width=0.8)),
                 customdata=pw_df['Control_n'].values,
-                hovertemplate='<b>%{y}</b><br>↑ Control: <b>%{customdata}</b><extra></extra>',
+                hovertemplate='<b>%{y}</b><br>↓ in ADHD: <b>%{customdata}</b><extra></extra>',
                 text=[str(n) if n > 0 else '' for n in pw_df['Control_n']],
+                textposition='inside', textfont=dict(size=13, color='white'), insidetextanchor='middle',
+            ))
+            # RIGHT = Upregulated in ADHD (red)
+            fig_mirror.add_trace(go.Bar(
+                name='↑ in ADHD', x=pw_df['ADHD_n'], y=pw_df['Pathway'],
+                orientation='h', marker=dict(color=COLORS['ADHD'], line=dict(color='white', width=0.8)),
+                customdata=pw_df['ADHD_n'].values,
+                hovertemplate='<b>%{y}</b><br>↑ in ADHD: <b>%{customdata}</b><extra></extra>',
+                text=[str(n) if n > 0 else '' for n in pw_df['ADHD_n']],
                 textposition='inside', textfont=dict(size=13, color='white'), insidetextanchor='middle',
             ))
             for i, row_pw in pw_df.iterrows():
                 if row_pw['Total'] > 0:
                     fig_mirror.add_annotation(
-                        x=max(pw_df['Control_n'].max(), 1) * 1.15, y=row_pw['Pathway'],
+                        x=max(pw_df['ADHD_n'].max(), 1) * 1.15, y=row_pw['Pathway'],
                         text=f"n={row_pw['Total']}", showarrow=False,
                         font=dict(size=10, color='#666'), xanchor='left')
 
@@ -827,7 +829,7 @@ def main():
                 barmode='relative',
                 title=dict(text=(f'<b>Metabolites per KEGG Pathway</b>'
                                  f'<br><span style="font-size:12px;color:#555">'
-                                 f'Left ← ↑ ADHD | ↑ Control → Right | {fc_label}, {pv_label}</span>'),
+                                 f'↓ in ADHD ← Left | Right → ↑ in ADHD | {fc_label}, {pv_label}</span>'),
                            font=dict(size=16, color='#111'), x=0.5, xanchor='center'),
                 xaxis=dict(title=dict(text='Number of metabolites', font=dict(size=13)),
                            zeroline=True, zerolinecolor='#222', zerolinewidth=2,
@@ -852,18 +854,18 @@ def main():
                         unsafe_allow_html=True)
             for _pw_idx, path in enumerate(sorted(selected_paths, key=lambda p: -path_all[p])):
                 path_cpds = kegg_df[kegg_df['KEGG_Pathways'].str.contains(re.escape(path), na=False)]
-                adhd_up   = path_cpds[path_cpds['_direction'] == '↑ ADHD']
-                ctrl_up   = path_cpds[path_cpds['_direction'] == '↑ Control']
+                adhd_up   = path_cpds[path_cpds['_direction'] == '↑ in ADHD']
+                ctrl_up   = path_cpds[path_cpds['_direction'] == '↓ in ADHD']
                 label = (f"**{path}** — {path_all[path]} total "
-                         f"| ↑ADHD: {path_adhd[path]} | ↑Control: {path_ctrl[path]}")
+                         f"| ↑ in ADHD: {path_adhd[path]} | ↓ in ADHD: {path_ctrl[path]}")
                 with st.expander(label):
                     ec1, ec2 = st.columns(2)
                     with ec1:
-                        st.markdown(f"<span class='badge-adhd'>↑ ADHD ({len(adhd_up)})</span>",
+                        st.markdown(f"<span class='badge-adhd'>↑ in ADHD ({len(adhd_up)})</span>",
                                     unsafe_allow_html=True)
                         st.write(list(adhd_up[name_col].dropna().unique()))
                     with ec2:
-                        st.markdown(f"<span class='badge-ctrl'>↑ Control ({len(ctrl_up)})</span>",
+                        st.markdown(f"<span class='badge-ctrl'>↓ in ADHD ({len(ctrl_up)})</span>",
                                     unsafe_allow_html=True)
                         st.write(list(ctrl_up[name_col].dropna().unique()))
                     st.markdown("**All compounds in this pathway:**")
@@ -934,16 +936,16 @@ def main():
                     unsafe_allow_html=True)
         for _na_idx, (axis, cnt) in enumerate(neuro_ctr.most_common(12)):
             axis_df = neuro_df[neuro_df['Neuro_Trap'].str.contains(re.escape(axis), na=False)]
-            adhd_up = axis_df[axis_df['_direction'] == '↑ ADHD']
-            ctrl_up = axis_df[axis_df['_direction'] == '↑ Control']
+            adhd_up = axis_df[axis_df['_direction'] == '↑ in ADHD']
+            ctrl_up = axis_df[axis_df['_direction'] == '↓ in ADHD']
             n_ns    = cnt - len(adhd_up) - len(ctrl_up)
             med_fc  = axis_df[fc_col].median() if fc_col in axis_df.columns else np.nan
             with st.expander(f"**{axis}** — {cnt} compounds"):
                 n1, n2, n3, n4 = st.columns(4)
-                n1.markdown(f"<span class='badge-adhd'>↑ ADHD</span><br>"
+                n1.markdown(f"<span class='badge-adhd'>↑ in ADHD</span><br>"
                             f"<b style='font-size:1.4rem;color:#c0392b'>{len(adhd_up)}</b>",
                             unsafe_allow_html=True)
-                n2.markdown(f"<span class='badge-ctrl'>↑ Control</span><br>"
+                n2.markdown(f"<span class='badge-ctrl'>↓ in ADHD</span><br>"
                             f"<b style='font-size:1.4rem;color:#1a6ea8'>{len(ctrl_up)}</b>",
                             unsafe_allow_html=True)
                 n3.markdown(f"<span style='background:#888;color:white;padding:3px 8px;"
@@ -954,9 +956,9 @@ def main():
                     n4.metric("Median Log₂FC", f"{med_fc:+.2f}", help="Positive = higher in Control")
 
                 ea, ec = st.columns(2)
-                ea.markdown("<span class='badge-adhd'>↑ ADHD compounds</span>", unsafe_allow_html=True)
+                ea.markdown("<span class='badge-adhd'>↑ in ADHD compounds</span>", unsafe_allow_html=True)
                 ea.write(list(adhd_up[name_col].dropna().unique()) or ["—"])
-                ec.markdown("<span class='badge-ctrl'>↑ Control compounds</span>", unsafe_allow_html=True)
+                ec.markdown("<span class='badge-ctrl'>↓ in ADHD compounds</span>", unsafe_allow_html=True)
                 ec.write(list(ctrl_up[name_col].dropna().unique()) or ["—"])
 
                 st.markdown("**All compounds in this axis:**")
@@ -988,14 +990,14 @@ def main():
         p_s = (vol_df[adjp_col] if show_adj else vol_df[pval_col])
         vol_df['Significance'] = np.where(
             (vol_df[fc_col].abs() >= fc_thresh) & (p_s < pval_thresh),
-            np.where(vol_df[fc_col] > 0, '↑ Control', '↑ ADHD'), 'n/s')
+            np.where(vol_df[fc_col] > 0, '↓ in ADHD', '↑ in ADHD'), 'n/s')
 
-        color_map  = {'↑ Control': COLORS['Control'], '↑ ADHD': COLORS['ADHD'], 'n/s': '#cccccc'}
+        color_map  = {'↓ in ADHD': COLORS['Control'], '↑ in ADHD': COLORS['ADHD'], 'n/s': '#cccccc'}
         sig_counts = vol_df['Significance'].value_counts()
 
         m1, m2, m3 = st.columns(3)
-        m1.metric("↑ in ADHD",      sig_counts.get('↑ ADHD',    0))
-        m2.metric("↑ in Control",   sig_counts.get('↑ Control', 0))
+        m1.metric("↑ in ADHD",      sig_counts.get('↑ in ADHD',    0))
+        m2.metric("↓ in ADHD",      sig_counts.get('↓ in ADHD', 0))
         m3.metric("Not significant", sig_counts.get('n/s',       0))
 
         fig_vol = px.scatter(
@@ -1032,8 +1034,8 @@ def main():
                     unsafe_allow_html=True)
         tl, tr = st.columns(2)
         with tl:
-            st.markdown("#### ↑ Higher in ADHD")
-            up_adhd = sig_df[sig_df['Significance'] == '↑ ADHD'].sort_values(fc_col, ascending=True)
+            st.markdown("#### ↑ Upregulated in ADHD")
+            up_adhd = sig_df[sig_df['Significance'] == '↑ in ADHD'].sort_values(fc_col, ascending=True)
             n_show_a = st.slider("Show top N (ADHD-elevated)", 5, max(5,len(up_adhd)),
                                   min(25, len(up_adhd)), 5, key='n_adhd')
             min_fc_a = st.slider("|FC| minimum (ADHD)", 0.0, 5.0, 0.0, 0.25, key='fc_adhd')
@@ -1042,8 +1044,8 @@ def main():
                          .rename(columns={name_col:'Compound', fc_col:'Log2FC', pval_col:'p-value'})
                          .reset_index(drop=True), use_container_width=True, height=350)
         with tr:
-            st.markdown("#### ↑ Higher in Control")
-            up_ctrl = sig_df[sig_df['Significance'] == '↑ Control'].sort_values(fc_col, ascending=False)
+            st.markdown("#### ↓ Downregulated in ADHD")
+            up_ctrl = sig_df[sig_df['Significance'] == '↓ in ADHD'].sort_values(fc_col, ascending=False)
             n_show_c = st.slider("Show top N (Control-elevated)", 5, max(5,len(up_ctrl)),
                                   min(25, len(up_ctrl)), 5, key='n_ctrl')
             min_fc_c = st.slider("|FC| minimum (Control)", 0.0, 5.0, 0.0, 0.25, key='fc_ctrl')
@@ -1060,13 +1062,13 @@ def main():
         dl_col1, dl_col2 = st.columns(2)
         with dl_col1:
             adhd_export = up_adhd.rename(columns={name_col:'Compound', fc_col:'Log2FC', pval_col:'p-value'})
-            st.download_button("⬇ ↑ADHD Compounds (CSV)", to_csv(adhd_export),
-                               file_name="significant_ADHD_up.csv", mime='text/csv',
+            st.download_button("⬇ ↑ in ADHD Compounds (CSV)", to_csv(adhd_export),
+                               file_name="significant_upregulated_ADHD.csv", mime='text/csv',
                                key='dl_adhd_sig', use_container_width=True)
         with dl_col2:
             ctrl_export = up_ctrl.rename(columns={name_col:'Compound', fc_col:'Log2FC', pval_col:'p-value'})
-            st.download_button("⬇ ↑Control Compounds (CSV)", to_csv(ctrl_export),
-                               file_name="significant_Control_up.csv", mime='text/csv',
+            st.download_button("⬇ ↓ in ADHD Compounds (CSV)", to_csv(ctrl_export),
+                               file_name="significant_downregulated_ADHD.csv", mime='text/csv',
                                key='dl_ctrl_sig', use_container_width=True)
 
         # Heatmap
@@ -1111,7 +1113,7 @@ def main():
         search_term = cf1.text_input("🔍 Search compound name", placeholder="e.g. Arachidonic")
         cat_filter  = cf2.multiselect("Category", sorted(df['Main_Categories'].dropna().unique()))
         sig_filter  = cf3.selectbox("Direction filter",
-                                     ['All','Significant only','↑ ADHD','↑ Control'])
+                                     ['All','Significant only','↑ in ADHD','↓ in ADHD'])
 
         ex_df = df.copy()
         if search_term:
@@ -1123,7 +1125,7 @@ def main():
                 lambda x: any(c in str(x) for c in cat_filter) if pd.notna(x) else False)]
         if sig_filter == 'Significant only':
             ex_df = ex_df[ex_df['_direction'] != 'n/s']
-        elif sig_filter in ('↑ ADHD','↑ Control'):
+        elif sig_filter in ('↑ in ADHD','↓ in ADHD'):
             ex_df = ex_df[ex_df['_direction'] == sig_filter]
 
         st.markdown(f"**{len(ex_df):,} compounds** match filters")
@@ -1228,9 +1230,9 @@ def main():
             columns={name_col:'Compound', '_direction':'Direction',
                      fc_col:'Log2FC', pval_col:'p-value'})
 
-        adhd_up_export = df[df['_direction'] == '↑ ADHD'][full_ecols].rename(
+        adhd_up_export = df[df['_direction'] == '↑ in ADHD'][full_ecols].rename(
             columns={name_col:'Compound', '_direction':'Direction', fc_col:'Log2FC', pval_col:'p-value'})
-        ctrl_up_export = df[df['_direction'] == '↑ Control'][full_ecols].rename(
+        ctrl_up_export = df[df['_direction'] == '↓ in ADHD'][full_ecols].rename(
             columns={name_col:'Compound', '_direction':'Direction', fc_col:'Log2FC', pval_col:'p-value'})
 
         r1c1, r1c2 = st.columns(2)
