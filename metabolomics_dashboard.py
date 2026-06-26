@@ -521,8 +521,17 @@ def main():
         fig_ox_pie = px.pie(ox_c, names='Level', values='Count', color='Level',
                             color_discrete_sequence=['#2ecc71','#f1c40f','#e67e22','#e74c3c','#8e44ad'],
                             title='Compounds by Oxidation Level', hole=0.4)
-        fig_ox_pie.update_traces(textinfo='percent+label', textfont_size=13)
-        fig_ox_pie.update_layout(margin=dict(t=50,b=10))
+        fig_ox_pie.update_traces(textinfo='percent+label', textfont_size=12,
+                                  textposition='auto',
+                                  insidetextorientation='horizontal')
+        fig_ox_pie.update_layout(
+            margin=dict(t=50, b=80, l=40, r=40),
+            uniformtext_minsize=9,
+            uniformtext_mode='hide',
+            showlegend=True,
+            legend=dict(orientation='v', x=1.02, y=0.5,
+                        font=dict(size=12), bgcolor='rgba(0,0,0,0)'),
+        )
         cr.plotly_chart(fig_ox_pie, use_container_width=True)
 
         st.markdown("<div class='section-header'>Clinical Oxidative Stress Categories</div>",
