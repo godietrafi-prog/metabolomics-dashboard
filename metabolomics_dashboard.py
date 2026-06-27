@@ -287,30 +287,6 @@ def load_group_map():
     return mapping
 
 
-@st.cache_data(show_spinner=False)
-def load_clinical_bmi():
-    """Return dict {sample_col: bmi_percentile} from clinical file."""
-    wb = openpyxl.load_workbook(CLINICAL_FILE, read_only=True)
-    ws = wb['ALL_data']
-    headers = [str(h).strip() if h else '' for h in
-               next(ws.iter_rows(min_row=1, max_row=1, values_only=True))]
-    try:
-        col_code = headers.index('code')
-        col_bmi  = headers.index('bmi_precentage')
-    except ValueError:
-        return {}
-    result = {}
-    for row in ws.iter_rows(min_row=2, values_only=True):
-        code = row[col_code]
-        bmi_pct = row[col_bmi]
-        if code:
-            col = code_to_col(code)
-            try:
-                result[col] = float(bmi_pct) if bmi_pct is not None else None
-            except (ValueError, TypeError):
-                result[col] = None
-    return result
-
 
 @st.cache_data(show_spinner="Parsing insights file…")
 def load_insights(path: str):
@@ -383,13 +359,12 @@ def main():
 
         st.divider()
         st.header("🔬 Statistical Filters")
-        fc_thresh   = st.slider("|Log₂ FC| threshold", 0.0, 4.0, 0.1, 0.1,
-                                help="Thesis original: 0.1 (essentially any change). "
-                                     "Set higher to focus on large-effect compounds.")
+        fc_thresh   = st.slider("|Log₂ FC| threshold", 0.0, 4.0, 1.0, 0.1,
+                                help="Standard threshold: 1.0 (2-fold change). "
+                                     "Lower values capture subtle changes; higher values focus on strong effects.")
         pval_thresh = st.selectbox("P-value threshold",
-                                   [1.0, 0.5, 0.1, 0.05, 0.01, 0.001], index=4,
-                                   format_func=lambda v: "Any (no filter)" if v == 1.0
-                                   else (f"{v}  ✦ thesis" if v == 0.01 else str(v)))
+                                   [1.0, 0.5, 0.1, 0.05, 0.01, 0.001], index=3,
+                                   format_func=lambda v: "Any (no filter)" if v == 1.0 else str(v))
         show_adj    = st.checkbox("Use adjusted p-value (FDR)", value=False)
 
     # ── Load data ────────────────────────────────────────────────────────────
@@ -401,39 +376,21 @@ def main():
     adhd_cols    = [c for c in sample_cols if grp_norm.get(c) == "ADHD"]
     control_cols = [c for c in sample_cols if grp_norm.get(c) == "Control"]
 
-    # ── Sidebar: Sample Exclusion (needs sample list → must come after data load) ─
-    bmi_map = load_clinical_bmi()
+    # ── Sidebar: Sample Exclusion (manual only) ──────────────────────────────
     with st.sidebar:
         st.divider()
         st.header("🚫 Sample Exclusion")
 
-        _bmi_range = st.slider(
-            "Include BMI percentile range",
-            min_value=0, max_value=100, value=(0, 100), step=1,
-            help="Samples outside this range are suggested for exclusion. "
-                 "Default: all samples included (0–100), matching the original thesis. "
-                 "Set to 5–85 to exclude obesity/underweight outliers (CDC criteria)."
-        )
-
         def _sample_label(s):
             grp = grp_norm.get(s, '?')
-            bmi = bmi_map.get(s)
-            bmi_str = f"  BMI%={bmi:.0f}" if bmi is not None else ""
-            return f"{s} ({grp}){bmi_str}"
+            return f"{s} ({grp})"
 
-        _bmi_lo, _bmi_hi = _bmi_range
-        _auto_excl = sorted([
-            s for s in sample_cols
-            if bmi_map.get(s) is not None
-            and (bmi_map[s] < _bmi_lo or bmi_map[s] > _bmi_hi)
-        ])
         _excluded = st.multiselect(
             "Excluded samples",
             options=sorted(sample_cols),
-            default=_auto_excl,
+            default=[],
             format_func=_sample_label,
-            help="Samples removed from ALL statistical calculations. "
-                 "Adjust the BMI slider above to auto-populate, or select manually."
+            help="Samples removed from ALL statistical calculations."
         )
 
     _excl_set    = set(_excluded)
