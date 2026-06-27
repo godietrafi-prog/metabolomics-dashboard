@@ -953,14 +953,14 @@ def main():
             ))
             fig_radar.update_layout(
                 polar=dict(
-                    radialaxis=dict(visible=True, tickfont_size=10),
-                    angularaxis=dict(tickfont=dict(size=10)),
+                    radialaxis=dict(visible=True, tickfont_size=16),
+                    angularaxis=dict(tickfont=dict(size=17)),
                     domain=dict(x=[0.05, 0.95], y=[0.05, 0.95]),
                 ),
-                title=dict(text='Neurotransmitter Axis Coverage', font_size=13),
-                margin=dict(t=50, b=50, l=70, r=70),
-                height=380,
-                font=dict(size=11, color='#111'),
+                title=dict(text='Neurotransmitter Axis Coverage', font_size=18),
+                margin=dict(t=60, b=60, l=90, r=90),
+                height=420,
+                font=dict(size=16, color='#111'),
             )
             cr.plotly_chart(fig_radar, use_container_width=True)
 
