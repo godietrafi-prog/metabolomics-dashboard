@@ -1079,9 +1079,9 @@ def main():
             if len(up_a) == 0:
                 st.info(f"No compounds elevated in {GROUP_A} with current filters.")
             else:
-                n_max_a  = max(len(up_a), 1)
+                n_max_a  = len(up_a)
                 n_show_a = st.slider(f"Show top N ({GROUP_A}-elevated)", 1, n_max_a,
-                                      min(25, n_max_a), key='n_adhd')
+                                      min(25, n_max_a), key='n_adhd') if n_max_a > 1 else n_max_a
                 min_fc_a = st.slider(f"|FC| minimum ({GROUP_A})", 0.0, 5.0, 0.0, 0.25, key='fc_adhd')
                 shown_a  = up_a[up_a[fc_col].abs() >= min_fc_a].head(n_show_a)
                 st.dataframe(shown_a[[name_col, fc_col, pval_col, 'LM_Main_Class','KEGG_Pathways']]
@@ -1094,9 +1094,9 @@ def main():
             if len(up_b) == 0:
                 st.info(f"No compounds elevated in {GROUP_B} with current filters.")
             else:
-                n_max_b  = max(len(up_b), 1)
+                n_max_b  = len(up_b)
                 n_show_b = st.slider(f"Show top N ({GROUP_B}-elevated)", 1, n_max_b,
-                                      min(25, n_max_b), key='n_ctrl')
+                                      min(25, n_max_b), key='n_ctrl') if n_max_b > 1 else n_max_b
                 min_fc_b = st.slider(f"|FC| minimum ({GROUP_B})", 0.0, 5.0, 0.0, 0.25, key='fc_ctrl')
                 shown_b  = up_b[up_b[fc_col].abs() >= min_fc_b].head(n_show_b)
                 st.dataframe(shown_b[[name_col, fc_col, pval_col, 'LM_Main_Class','KEGG_Pathways']]
@@ -1106,7 +1106,9 @@ def main():
         # ── Heatmap ───────────────────────────────────────────────────────
         st.markdown("<div class='section-header'>Intensity Heatmap — Top Significant Compounds (log₁₀)</div>",
                     unsafe_allow_html=True)
-        n_heat = st.slider("Compounds in heatmap", 10, 80, 40, 5)
+        n_sig_total = int((vol_df['Significance'] != 'n/s').sum())
+        n_heat_max  = max(n_sig_total, 10)
+        n_heat = st.slider("Compounds in heatmap", 1, n_heat_max, min(40, n_heat_max), 5) if n_heat_max > 1 else n_heat_max
         top_sig_names = (vol_df[vol_df['Significance'] != 'n/s']
                          .nlargest(n_heat, '-log10p')['Original_Name'].tolist())
         heat_df = df[df['Original_Name'].isin(top_sig_names)].drop_duplicates('Original_Name').copy()
