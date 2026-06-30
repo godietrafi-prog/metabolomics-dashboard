@@ -164,7 +164,10 @@ def code_to_col(clinical_code: str) -> str:
 
 @st.cache_data(show_spinner="Loading group assignments…")
 def load_group_map(path: str) -> dict:
-    wb = openpyxl.load_workbook(path, read_only=True)
+    try:
+        wb = openpyxl.load_workbook(path, read_only=True)
+    except Exception:
+        return {}  # groups file missing or invalid — group-based features disabled
     # Try sheet 'ALL_data' first (ADHD project format), else use first sheet
     ws = wb['ALL_data'] if 'ALL_data' in wb.sheetnames else wb.active
     mapping = {}
