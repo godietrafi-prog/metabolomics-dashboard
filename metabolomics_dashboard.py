@@ -849,14 +849,13 @@ def main():
         for _, row in kegg_df.iterrows():
             paths = [p.strip() for p in str(row['KEGG_Pathways']).split(';') if p.strip()]
             direction = row.get('_direction', '')
-            is_sig = bool(row.get('_sig', False))
             for p in paths:
                 path_all[p] += 1
-                if is_sig and direction == DIR_A: path_a[p] += 1
-                if is_sig and direction == DIR_B: path_b[p] += 1
+                if direction == DIR_A: path_a[p] += 1
+                if direction == DIR_B: path_b[p] += 1
 
         all_pathway_names = [p for p, _ in path_all.most_common()]
-        n_sig_kegg = sum(1 for _, row in kegg_df.iterrows() if row.get('_sig', False))
+        n_sig_kegg = int((kegg_df['_direction'] != 'n/s').sum())
 
         pv_label = "Any" if pval_thresh >= 1.0 else f"p<{pval_thresh}"
         fc_label = f"|FC|≥{fc_thresh}" if fc_thresh > 0 else "any FC"
@@ -1309,7 +1308,7 @@ def main():
         st.caption("All exports reflect the current filter settings (FC threshold, p-value, statistical method).")
 
         ecols = export_cols(df, name_col, fc_col, pval_col)
-        sig = df[df['_sig']].copy()
+        sig = df[df['_direction'] != 'n/s'].copy()
         up_a  = df[df['_direction'] == DIR_A].copy()
         up_b  = df[df['_direction'] == DIR_B].copy()
 
