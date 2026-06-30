@@ -13,6 +13,14 @@
       "researcher": "rafi@telhai.ac.il",
       "group_a": "ADHD",
       "group_b": "Control"
+    },
+    {
+      "project_id": "adhd_2021",
+      "project_name": "ADHD Plasma Metabolomics 2021",
+      "date": "2026-06-30",
+      "researcher": "rafi@telhai.ac.il",
+      "group_a": "ADHD",
+      "group_b": "Control"
     }
   ]
 }
