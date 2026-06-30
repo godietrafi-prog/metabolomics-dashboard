@@ -1383,8 +1383,8 @@ def main():
             col_pt, col_mt = st.columns(2)
             with col_pt:
                 st.markdown(f"**Peak Table** — {n_inc:,} compounds with PubChem / HMDB / KEGG ID")
-                if n_exc:
-                    st.caption(f"⚠ {n_exc} compounds excluded (no recognized identifier).")
+                st.caption(f"⚠ {n_exc} compounds excluded (no recognized identifier)."
+                           if n_exc else " ")   # non-breaking space keeps row height identical
                 st.dataframe(peak_table.head(5), use_container_width=True, height=200)
                 st.download_button(
                     "⬇ Peak Table CSV (MetaboAnalyst)",
@@ -1397,6 +1397,7 @@ def main():
 
             with col_mt:
                 st.markdown(f"**Sample Metadata** — {len(meta_table)} samples × 2 columns")
+                st.caption(" ")   # spacer — keeps alignment with left column
                 st.dataframe(meta_table, use_container_width=True, height=200)
                 st.download_button(
                     "⬇ Sample Metadata CSV (MetaboAnalyst)",
