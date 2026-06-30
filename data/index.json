@@ -1,16 +1,18 @@
 {
   "projects": [
     {
-      "project_id": "adhd_2026",
-      "project_name": "ADHD Plasma Metabolomics 2026",
-      "date": "2026-01-01",
-      "researcher": "Rafi Steckler"
-    },
-    {
       "project_id": "adhd__rafi_2026_20260629_cozs",
       "project_name": "ADHD Rafi 2026",
       "date": "2026-06-29",
       "researcher": "Rafi"
+    },
+    {
+      "project_id": "adhd_2026",
+      "project_name": "ADHD Plasma Metabolomics 2026",
+      "date": "2026-06-30",
+      "researcher": "rafi@telhai.ac.il",
+      "group_a": "ADHD",
+      "group_b": "Control"
     }
   ]
 }
