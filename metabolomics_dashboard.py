@@ -4,6 +4,7 @@ Multi-project dashboard — project selected via URL query param ?project=<id>
 """
 
 import os
+import io
 import json
 import streamlit as st
 import pandas as pd
@@ -300,6 +301,70 @@ def run_normality_test(data_json: str, adhd_cols: tuple, control_cols: tuple) ->
     }
 
 
+# ─── Download helpers ─────────────────────────────────────────────────────────
+
+EXPORT_BASE = [
+    'Original_Name', 'Formula_Final', 'MW_Final', 'HMDB_ID', 'KEGG_ID_Final',
+    'Main_Categories', 'LM_Category', 'LM_Main_Class', 'LM_Sub_Class',
+    'OC_Ratio', 'NOSC', 'KEGG_Pathways', 'Neuro_Trap', 'Clinical_Tags', 'Structural_Tags',
+]
+
+
+def to_csv(df: pd.DataFrame) -> bytes:
+    return df.to_csv(index=False).encode('utf-8')
+
+
+def to_excel(df: pd.DataFrame) -> bytes:
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine='openpyxl') as w:
+        df.to_excel(w, index=False)
+    return buf.getvalue()
+
+
+def export_cols(df: pd.DataFrame, name_col: str, fc_col: str, pval_col: str) -> list:
+    stat_cols = [fc_col, pval_col, '_direction']
+    cols = [name_col] + stat_cols + [c for c in EXPORT_BASE if c in df.columns and c != name_col]
+    return [c for c in cols if c in df.columns]
+
+
+def build_metaboanalyst(df: pd.DataFrame, sample_cols: list, grp_norm: dict):
+    """Build MetaboAnalyst peak table and metadata DataFrames."""
+    def best_id(row):
+        pubchem = str(row.get('PubChem_CID', '') or '').strip()
+        hmdb    = str(row.get('HMDB_ID',     '') or '').strip()
+        kegg    = str(row.get('KEGG_ID_Final','') or '').strip()
+        if pubchem and pubchem not in ('nan', '-', ''):
+            try:
+                return str(int(float(pubchem)))
+            except (ValueError, OverflowError):
+                pass
+        if hmdb.startswith('HMDB') and len(hmdb) > 4:
+            return hmdb
+        if kegg and kegg not in ('-', 'nan', ''):
+            return kegg
+        return None
+
+    df2 = df.copy()
+    df2['_ma_id'] = df2.apply(best_id, axis=1)
+    included   = df2[df2['_ma_id'].notna()].copy()
+    n_excluded = len(df2) - len(included)
+
+    peak_rows = []
+    for _, row in included.iterrows():
+        r = {'PubChem_CID': row['_ma_id']}
+        for s in sample_cols:
+            val = pd.to_numeric(row.get(s, np.nan), errors='coerce')
+            r[s] = 0 if pd.isna(val) else val
+        peak_rows.append(r)
+    peak_table = pd.DataFrame(peak_rows)
+
+    meta = pd.DataFrame([
+        {'Sample': s, 'Group': grp_norm.get(s, 'Unknown')}
+        for s in sample_cols
+    ])
+    return peak_table, meta, len(included), n_excluded
+
+
 # ─── Main app ─────────────────────────────────────────────────────────────────
 
 def main():
@@ -477,6 +542,7 @@ def main():
         "🧠 Neurochemistry",
         f"📈 {GROUP_A} vs {GROUP_B}",
         "🔍 Compound Explorer",
+        "📥 Downloads & Exports",
     ])
 
     # ═════════════════════════════════════════════════════════════════════════
@@ -1242,6 +1308,125 @@ def main():
                 kegg_val = row.get('KEGG_Pathways','')
                 if kegg_val and str(kegg_val) != '-':
                     st.markdown(f"**KEGG Pathways:** {kegg_val}")
+
+
+    # ═════════════════════════════════════════════════════════════════════════
+    # TAB 8 — DOWNLOADS & EXPORTS
+    # ═════════════════════════════════════════════════════════════════════════
+    with tabs[7]:
+        st.markdown("## 📥 Downloads & Exports")
+        st.caption("All exports reflect the current filter settings (FC threshold, p-value, statistical method).")
+
+        ecols = export_cols(df, name_col, fc_col, pval_col)
+        sig = df[df['_sig']].copy()
+        up_a  = df[df['_direction'] == DIR_A].copy()
+        up_b  = df[df['_direction'] == DIR_B].copy()
+
+        def dl_row(label: str, data_df: pd.DataFrame, stem: str):
+            c1, c2, c3 = st.columns([3, 1, 1])
+            c1.markdown(f"**{label}** — {len(data_df):,} compounds")
+            c2.download_button(
+                "⬇ CSV", to_csv(data_df[ecols]),
+                file_name=f"{stem}.csv", mime="text/csv",
+                key=f"csv_{stem}", use_container_width=True,
+            )
+            c3.download_button(
+                "⬇ Excel", to_excel(data_df[ecols]),
+                file_name=f"{stem}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key=f"xl_{stem}", use_container_width=True,
+            )
+
+        # ── Core datasets ──────────────────────────────────────────────────
+        st.markdown("### Core datasets")
+        dl_row("All annotated compounds", df, "all_compounds")
+        dl_row(f"Significant compounds (p<{pval_thresh}, |FC|≥{fc_thresh})", sig, "significant_compounds")
+        dl_row(f"↑ {GROUP_A} compounds", up_a, f"up_{GROUP_A.lower()}")
+        dl_row(f"↑ {GROUP_B} compounds", up_b, f"up_{GROUP_B.lower()}")
+
+        st.divider()
+
+        # ── Thematic slices ────────────────────────────────────────────────
+        st.markdown("### Thematic slices")
+
+        lipid_df = sig[sig.get('Main_Categories', pd.Series(dtype=str)).astype(str).str.contains('Lipid|lipid', na=False)] \
+            if 'Main_Categories' in sig.columns else sig.iloc[0:0]
+        kegg_df  = sig[sig['KEGG_Pathways'].astype(str).str.strip().str.replace('-','').str.len() > 0] \
+            if 'KEGG_Pathways' in sig.columns else sig.iloc[0:0]
+        neuro_df = sig[sig['Neuro_Trap'].astype(str).str.strip().str.lower().isin(['yes','true','1'])] \
+            if 'Neuro_Trap' in sig.columns else sig.iloc[0:0]
+        hoc_df   = sig[pd.to_numeric(sig.get('OC_Ratio', pd.Series(dtype=float)), errors='coerce') > 0.4] \
+            if 'OC_Ratio' in sig.columns else sig.iloc[0:0]
+
+        dl_row("Significant lipids", lipid_df, "sig_lipids")
+        dl_row("Significant KEGG-mapped compounds", kegg_df, "sig_kegg_mapped")
+        dl_row("Neuro-active significant compounds", neuro_df, "sig_neuroactive")
+        dl_row("High-oxidation compounds (O/C > 0.4)", hoc_df, "sig_high_oxidation")
+
+        st.divider()
+
+        # ── Full data with sample intensities ─────────────────────────────
+        st.markdown("### Full data with sample intensities")
+        if sample_cols:
+            int_cols = [c for c in ([name_col, fc_col, pval_col, '_direction']
+                                    + [c2 for c2 in EXPORT_BASE if c2 in df.columns and c2 != name_col]
+                                    + sample_cols) if c in df.columns]
+            dl_row("All compounds + raw intensities", df[int_cols], "all_with_intensities")
+            dl_row("Significant compounds + raw intensities", sig[int_cols], "sig_with_intensities")
+        else:
+            st.info("No sample intensity columns detected in the current dataset.")
+
+        st.divider()
+
+        # ── MetaboAnalyst export ───────────────────────────────────────────
+        st.markdown("### MetaboAnalyst Export")
+        st.markdown(
+            "Two files required by [MetaboAnalyst](https://www.metaboanalyst.ca/) "
+            "for statistical analysis and pathway enrichment."
+        )
+
+        if not sample_cols:
+            st.warning("Sample intensity columns not detected — MetaboAnalyst export unavailable.")
+        else:
+            peak_table, meta_table, n_inc, n_exc = build_metaboanalyst(df, sample_cols, grp_norm)
+
+            col_pt, col_mt = st.columns(2)
+            with col_pt:
+                st.markdown(f"**Peak Table** — {n_inc:,} compounds with PubChem / HMDB / KEGG ID")
+                if n_exc:
+                    st.caption(f"⚠ {n_exc} compounds excluded (no recognized identifier).")
+                st.dataframe(peak_table.head(5), use_container_width=True, height=200)
+                st.download_button(
+                    "⬇ Peak Table CSV (MetaboAnalyst)",
+                    to_csv(peak_table),
+                    file_name="metaboanalyst_peak_table.csv",
+                    mime="text/csv",
+                    key="ma_peak",
+                    use_container_width=True,
+                )
+
+            with col_mt:
+                st.markdown(f"**Sample Metadata** — {len(meta_table)} samples × 2 columns")
+                st.dataframe(meta_table, use_container_width=True, height=200)
+                st.download_button(
+                    "⬇ Sample Metadata CSV (MetaboAnalyst)",
+                    to_csv(meta_table),
+                    file_name="metaboanalyst_metadata.csv",
+                    mime="text/csv",
+                    key="ma_meta",
+                    use_container_width=True,
+                )
+
+            with st.expander("How to use in MetaboAnalyst"):
+                st.markdown(
+                    f"""
+1. Go to **metaboanalyst.ca → Statistical Analysis → Two-group Comparison**
+2. Upload **Peak Table CSV** as the data file (rows = compounds, columns = samples)
+3. The first column (`PubChem_CID`) contains the identifier — select **PubChem CID** as ID type
+4. Upload **Sample Metadata CSV** for group labels — column `Sample` maps to sample names, `Group` is the class label
+5. For pathway analysis, use **Pathway Analysis** module and upload the same Peak Table
+"""
+                )
 
 
 # ─── Entry point ──────────────────────────────────────────────────────────────
