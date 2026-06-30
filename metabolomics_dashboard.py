@@ -1381,10 +1381,15 @@ def main():
             peak_table, meta_table, n_inc, n_exc = build_metaboanalyst(df, sample_cols, grp_norm)
 
             col_pt, col_mt = st.columns(2)
+            _hdr = 'style="min-height:52px;line-height:1.5;margin-bottom:4px"'
             with col_pt:
-                st.markdown(f"**Peak Table** — {n_inc:,} compounds with PubChem / HMDB / KEGG ID")
-                st.caption(f"⚠ {n_exc} compounds excluded (no recognized identifier)."
-                           if n_exc else " ")   # non-breaking space keeps row height identical
+                warn = (f'<br><small style="color:#888">⚠ {n_exc} compounds excluded '
+                        f'(no recognized identifier).</small>') if n_exc else ''
+                st.markdown(
+                    f'<div {_hdr}><b>Peak Table</b> — {n_inc:,} compounds '
+                    f'with PubChem / HMDB / KEGG ID{warn}</div>',
+                    unsafe_allow_html=True,
+                )
                 st.dataframe(peak_table.head(5), use_container_width=True, height=200)
                 st.download_button(
                     "⬇ Peak Table CSV (MetaboAnalyst)",
@@ -1396,8 +1401,11 @@ def main():
                 )
 
             with col_mt:
-                st.markdown(f"**Sample Metadata** — {len(meta_table)} samples × 2 columns")
-                st.caption(" ")   # spacer — keeps alignment with left column
+                st.markdown(
+                    f'<div {_hdr}><b>Sample Metadata</b> — '
+                    f'{len(meta_table)} samples × 2 columns</div>',
+                    unsafe_allow_html=True,
+                )
                 st.dataframe(meta_table, use_container_width=True, height=200)
                 st.download_button(
                     "⬇ Sample Metadata CSV (MetaboAnalyst)",
