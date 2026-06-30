@@ -1,10 +1,11 @@
 {
   "project_id": "adhd_2026",
   "project_name": "ADHD Plasma Metabolomics 2026",
+  "researcher": "rafi@telhai.ac.il",
+  "researcher_email": "rafi@telhai.ac.il",
   "group_a": "ADHD",
   "group_b": "Control",
-  "researcher": "Rafi Steckler",
-  "date": "2026-01-01",
-  "notes": "Untargeted LC-MS plasma metabolomics, ADHD vs neurotypical controls",
-  "institution": "Tel-Hai University"
+  "institution": "Tel-Hai University",
+  "date": "2026-06-30",
+  "notes": ""
 }
