@@ -873,97 +873,94 @@ def main():
         else:
             # ── build chart dataframe ─────────────────────────────────────
             pw_df = pd.DataFrame({
-                'Pathway':  selected_paths,
-                'A_n':      [path_a[p]   for p in selected_paths],
-                'B_n':      [path_b[p]   for p in selected_paths],
-                'Total':    [path_all[p] for p in selected_paths],
-            }).sort_values('A_n')   # sort by group A count ascending → biggest at top
+                'Pathway': selected_paths,
+                'A_n':     [path_a[p]   for p in selected_paths],
+                'B_n':     [path_b[p]   for p in selected_paths],
+                'Total':   [path_all[p] for p in selected_paths],
+            })
+            pw_df['NS_n'] = pw_df['Total'] - pw_df['A_n'] - pw_df['B_n']
+            pw_df = pw_df.sort_values('Total')   # longest bar at top
 
-            bar_h   = max(28, min(48, 600 // max(len(pw_df), 1)))
-            fig_h   = max(420, len(pw_df) * bar_h + 160)
+            bar_h  = max(28, min(48, 600 // max(len(pw_df), 1)))
+            fig_h  = max(420, len(pw_df) * bar_h + 160)
             pv_label = "Any" if pval_thresh >= 1.0 else f"p<{pval_thresh}"
             fc_label = f"|FC|≥{fc_thresh}" if fc_thresh > 0 else "any FC"
 
             fig_mirror = go.Figure()
 
-            # GROUP_A bars (drawn on LEFT via negative x trick)
+            # Not-significant layer (grey, base)
             fig_mirror.add_trace(go.Bar(
-                name=DIR_A,
-                x=[-n for n in pw_df['A_n']],
+                name='Not significant',
+                x=pw_df['NS_n'],
                 y=pw_df['Pathway'],
                 orientation='h',
-                marker=dict(
-                    color=COLORS[GROUP_A],
-                    line=dict(color='white', width=0.8),
-                ),
-                customdata=pw_df['A_n'].values,
-                hovertemplate=f'<b>%{{y}}</b><br>{DIR_A}: <b>%{{customdata}}</b><extra></extra>',
-                text=[str(n) if n > 0 else '' for n in pw_df['A_n']],
+                marker=dict(color='#cccccc', line=dict(color='white', width=0.6)),
+                hovertemplate='<b>%{y}</b><br>Not significant: <b>%{x}</b><extra></extra>',
+                text=[str(n) if n > 0 else '' for n in pw_df['NS_n']],
                 textposition='inside',
-                textfont=dict(size=13, color='white'),
+                textfont=dict(size=11, color='#555'),
                 insidetextanchor='middle',
             ))
 
-            # GROUP_B bars (drawn on RIGHT)
+            # GROUP_A layer
+            fig_mirror.add_trace(go.Bar(
+                name=DIR_A,
+                x=pw_df['A_n'],
+                y=pw_df['Pathway'],
+                orientation='h',
+                marker=dict(color=COLORS[GROUP_A], line=dict(color='white', width=0.6)),
+                hovertemplate=f'<b>%{{y}}</b><br>{DIR_A}: <b>%{{x}}</b><extra></extra>',
+                text=[str(n) if n > 0 else '' for n in pw_df['A_n']],
+                textposition='inside',
+                textfont=dict(size=12, color='white'),
+                insidetextanchor='middle',
+            ))
+
+            # GROUP_B layer
             fig_mirror.add_trace(go.Bar(
                 name=DIR_B,
                 x=pw_df['B_n'],
                 y=pw_df['Pathway'],
                 orientation='h',
-                marker=dict(
-                    color=COLORS[GROUP_B],
-                    line=dict(color='white', width=0.8),
-                ),
-                customdata=pw_df['B_n'].values,
-                hovertemplate=f'<b>%{{y}}</b><br>{DIR_B}: <b>%{{customdata}}</b><extra></extra>',
+                marker=dict(color=COLORS[GROUP_B], line=dict(color='white', width=0.6)),
+                hovertemplate=f'<b>%{{y}}</b><br>{DIR_B}: <b>%{{x}}</b><extra></extra>',
                 text=[str(n) if n > 0 else '' for n in pw_df['B_n']],
                 textposition='inside',
-                textfont=dict(size=13, color='white'),
+                textfont=dict(size=12, color='white'),
                 insidetextanchor='middle',
             ))
 
             # Total count annotation on right margin
-            for i, row_pw in pw_df.iterrows():
-                if row_pw['Total'] > 0:
-                    fig_mirror.add_annotation(
-                        x=max(pw_df['B_n'].max(), 1) * 1.15,
-                        y=row_pw['Pathway'],
-                        text=f"n={row_pw['Total']}",
-                        showarrow=False,
-                        font=dict(size=10, color='#666'),
-                        xanchor='left',
-                    )
-
-            # compute symmetric x range
-            x_max = max(pw_df['A_n'].max(), pw_df['B_n'].max(), 1)
-            x_pad = x_max * 0.25
+            x_max = pw_df['Total'].max()
+            for _, row_pw in pw_df.iterrows():
+                fig_mirror.add_annotation(
+                    x=row_pw['Total'] + x_max * 0.02,
+                    y=row_pw['Pathway'],
+                    text=f"n={row_pw['Total']}",
+                    showarrow=False,
+                    font=dict(size=10, color='#444'),
+                    xanchor='left',
+                )
 
             fig_mirror.update_layout(
-                barmode='relative',
+                barmode='stack',
                 title=dict(
                     text=(f'<b>Metabolites per KEGG Pathway</b>'
                           f'<br><span style="font-size:12px;color:#555">'
-                          f'Left ← {DIR_A} &nbsp;|&nbsp; {DIR_B} → Right'
-                          f' &nbsp;|&nbsp; filters: {fc_label}, {pv_label}</span>'),
+                          f'Bar = all KEGG-mapped compounds &nbsp;|&nbsp; '
+                          f'Colored = significant ({fc_label}, {pv_label})</span>'),
                     font=dict(size=16, color='#111'),
                     x=0.5, xanchor='center',
                 ),
                 xaxis=dict(
                     title=dict(text='Number of metabolites', font=dict(size=13)),
                     tickfont=dict(size=12),
-                    tickangle=0,
-                    zeroline=True, zerolinecolor='#222', zerolinewidth=2,
+                    zeroline=True, zerolinecolor='#222', zerolinewidth=1,
                     gridcolor='#e8e8e8', gridwidth=1,
-                    range=[-(x_max + x_pad), x_max + x_pad * 3],
-                    tickmode='auto',
-                    nticks=min(11, x_max * 2 + 3),
                     tickformat='d',
-                    labelalias={str(-v): str(v) for v in range(1, x_max + 2)},
+                    range=[0, x_max * 1.12],
                 ),
-                yaxis=dict(
-                    tickfont=dict(size=12, color='#111'),
-                    automargin=True,
-                ),
+                yaxis=dict(tickfont=dict(size=12, color='#111'), automargin=True),
                 legend=dict(
                     orientation='h', x=0.5, y=-0.08, xanchor='center',
                     font=dict(size=13), bgcolor='rgba(0,0,0,0)',
@@ -971,8 +968,7 @@ def main():
                 ),
                 height=fig_h,
                 margin=dict(t=90, b=70, l=20, r=80),
-                paper_bgcolor='white',
-                plot_bgcolor='white',
+                paper_bgcolor='white', plot_bgcolor='white',
                 font=dict(family='Arial, sans-serif', size=13, color='#111'),
                 bargap=0.35,
             )
