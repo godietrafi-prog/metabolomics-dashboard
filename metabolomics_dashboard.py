@@ -841,26 +841,32 @@ def main():
     # ═════════════════════════════════════════════════════════════════════════
     with tabs[3]:
         kegg_df = df[df['KEGG_Pathways'].notna() & (df['KEGG_Pathways'] != '-')].copy()
-        st.markdown(f"### {len(kegg_df):,} compounds mapped to KEGG pathways")
 
-        # ── build full per-pathway counts (all pathways) ──────────────────
+        # ── build per-pathway counts ──────────────────────────────────────
         path_all = Counter()
-        path_a   = Counter()
-        path_b   = Counter()
+        path_a   = Counter()   # ↑ GROUP_A (higher in research group)
+        path_b   = Counter()   # ↑ GROUP_B (lower in research group)
         for _, row in kegg_df.iterrows():
             paths = [p.strip() for p in str(row['KEGG_Pathways']).split(';') if p.strip()]
-            fc = row.get(fc_col, np.nan)
-            pv = row.get(p_use,  np.nan)
-            is_a_up = pd.notna(fc) and pd.notna(pv) and fc < -fc_thresh and pv < pval_thresh
-            is_b_up = pd.notna(fc) and pd.notna(pv) and fc >  fc_thresh and pv < pval_thresh
+            direction = row.get('_direction', '')
+            is_sig = bool(row.get('_sig', False))
             for p in paths:
                 path_all[p] += 1
-                if is_a_up: path_a[p] += 1
-                if is_b_up: path_b[p] += 1
+                if is_sig and direction == DIR_A: path_a[p] += 1
+                if is_sig and direction == DIR_B: path_b[p] += 1
 
         all_pathway_names = [p for p, _ in path_all.most_common()]
+        n_sig_kegg = sum(1 for _, row in kegg_df.iterrows() if row.get('_sig', False))
 
-        # ── controls ─────────────────────────────────────────────────────
+        pv_label = "Any" if pval_thresh >= 1.0 else f"p<{pval_thresh}"
+        fc_label = f"|FC|≥{fc_thresh}" if fc_thresh > 0 else "any FC"
+
+        st.markdown(
+            f"### {len(kegg_df):,} compounds mapped to KEGG pathways "
+            f"— **{n_sig_kegg}** significant ({fc_label}, {pv_label})"
+        )
+
+        # ── pathway selector ──────────────────────────────────────────────
         selected_paths = st.multiselect(
             "Pathways to display (add or remove freely):",
             options=all_pathway_names,
@@ -871,94 +877,84 @@ def main():
         if not selected_paths:
             st.info("Select at least one pathway to display the chart.")
         else:
-            # ── build chart dataframe ─────────────────────────────────────
             pw_df = pd.DataFrame({
                 'Pathway': selected_paths,
-                'A_n':     [path_a[p]   for p in selected_paths],
-                'B_n':     [path_b[p]   for p in selected_paths],
+                'A_n':     [path_a[p] for p in selected_paths],   # ↑ GROUP_A (right)
+                'B_n':     [path_b[p] for p in selected_paths],   # ↑ GROUP_B (left)
                 'Total':   [path_all[p] for p in selected_paths],
             })
-            pw_df['NS_n'] = pw_df['Total'] - pw_df['A_n'] - pw_df['B_n']
-            pw_df = pw_df.sort_values('Total')   # longest bar at top
+            pw_df['Sig_total'] = pw_df['A_n'] + pw_df['B_n']
+            pw_df = pw_df.sort_values('Sig_total')   # most significant at top
 
-            bar_h  = max(28, min(48, 600 // max(len(pw_df), 1)))
-            fig_h  = max(420, len(pw_df) * bar_h + 160)
-            pv_label = "Any" if pval_thresh >= 1.0 else f"p<{pval_thresh}"
-            fc_label = f"|FC|≥{fc_thresh}" if fc_thresh > 0 else "any FC"
+            bar_h = max(28, min(48, 600 // max(len(pw_df), 1)))
+            fig_h = max(420, len(pw_df) * bar_h + 160)
 
             fig_mirror = go.Figure()
 
-            # Not-significant layer (grey, base)
+            # LEFT bars = ↑ GROUP_B = lower in research group (negative x trick)
             fig_mirror.add_trace(go.Bar(
-                name='Not significant',
-                x=pw_df['NS_n'],
+                name=f'↓ {GROUP_A}  (higher in {GROUP_B})',
+                x=[-n for n in pw_df['B_n']],
                 y=pw_df['Pathway'],
                 orientation='h',
-                marker=dict(color='#cccccc', line=dict(color='white', width=0.6)),
-                hovertemplate='<b>%{y}</b><br>Not significant: <b>%{x}</b><extra></extra>',
-                text=[str(n) if n > 0 else '' for n in pw_df['NS_n']],
-                textposition='inside',
-                textfont=dict(size=11, color='#555'),
-                insidetextanchor='middle',
-            ))
-
-            # GROUP_A layer
-            fig_mirror.add_trace(go.Bar(
-                name=DIR_A,
-                x=pw_df['A_n'],
-                y=pw_df['Pathway'],
-                orientation='h',
-                marker=dict(color=COLORS[GROUP_A], line=dict(color='white', width=0.6)),
-                hovertemplate=f'<b>%{{y}}</b><br>{DIR_A}: <b>%{{x}}</b><extra></extra>',
-                text=[str(n) if n > 0 else '' for n in pw_df['A_n']],
-                textposition='inside',
-                textfont=dict(size=12, color='white'),
-                insidetextanchor='middle',
-            ))
-
-            # GROUP_B layer
-            fig_mirror.add_trace(go.Bar(
-                name=DIR_B,
-                x=pw_df['B_n'],
-                y=pw_df['Pathway'],
-                orientation='h',
-                marker=dict(color=COLORS[GROUP_B], line=dict(color='white', width=0.6)),
-                hovertemplate=f'<b>%{{y}}</b><br>{DIR_B}: <b>%{{x}}</b><extra></extra>',
+                marker=dict(color=COLORS[GROUP_B], line=dict(color='white', width=0.8)),
+                customdata=pw_df['B_n'].values,
+                hovertemplate=(f'<b>%{{y}}</b><br>'
+                               f'Lower in {GROUP_A}: <b>%{{customdata}}</b><extra></extra>'),
                 text=[str(n) if n > 0 else '' for n in pw_df['B_n']],
                 textposition='inside',
                 textfont=dict(size=12, color='white'),
                 insidetextanchor='middle',
             ))
 
-            # Total count annotation on right margin
-            x_max = pw_df['Total'].max()
+            # RIGHT bars = ↑ GROUP_A = higher in research group
+            fig_mirror.add_trace(go.Bar(
+                name=f'↑ {GROUP_A}  (lower in {GROUP_B})',
+                x=pw_df['A_n'],
+                y=pw_df['Pathway'],
+                orientation='h',
+                marker=dict(color=COLORS[GROUP_A], line=dict(color='white', width=0.8)),
+                customdata=pw_df['A_n'].values,
+                hovertemplate=(f'<b>%{{y}}</b><br>'
+                               f'Higher in {GROUP_A}: <b>%{{customdata}}</b><extra></extra>'),
+                text=[str(n) if n > 0 else '' for n in pw_df['A_n']],
+                textposition='inside',
+                textfont=dict(size=12, color='white'),
+                insidetextanchor='middle',
+            ))
+
+            # n=total annotation on right margin
+            x_max = max(pw_df['A_n'].max(), pw_df['B_n'].max(), 1)
+            x_pad = x_max * 0.25
             for _, row_pw in pw_df.iterrows():
                 fig_mirror.add_annotation(
-                    x=row_pw['Total'] + x_max * 0.02,
+                    x=x_max + x_pad * 0.6,
                     y=row_pw['Pathway'],
                     text=f"n={row_pw['Total']}",
                     showarrow=False,
-                    font=dict(size=10, color='#444'),
+                    font=dict(size=10, color='#666'),
                     xanchor='left',
                 )
 
             fig_mirror.update_layout(
-                barmode='stack',
+                barmode='relative',
                 title=dict(
-                    text=(f'<b>Metabolites per KEGG Pathway</b>'
+                    text=(f'<b>{GROUP_A} relative to {GROUP_B}</b>'
                           f'<br><span style="font-size:12px;color:#555">'
-                          f'Bar = all KEGG-mapped compounds &nbsp;|&nbsp; '
-                          f'Colored = significant ({fc_label}, {pv_label})</span>'),
+                          f'← Lower in {GROUP_A} &nbsp;|&nbsp; Higher in {GROUP_A} →'
+                          f'&nbsp;&nbsp;({fc_label}, {pv_label})'
+                          f'&nbsp;|&nbsp; n = total mapped</span>'),
                     font=dict(size=16, color='#111'),
                     x=0.5, xanchor='center',
                 ),
                 xaxis=dict(
-                    title=dict(text='Number of metabolites', font=dict(size=13)),
+                    title=dict(text='Number of significant metabolites', font=dict(size=13)),
                     tickfont=dict(size=12),
-                    zeroline=True, zerolinecolor='#222', zerolinewidth=1,
-                    gridcolor='#e8e8e8', gridwidth=1,
+                    zeroline=True, zerolinecolor='#222', zerolinewidth=2,
+                    gridcolor='#e8e8e8',
+                    range=[-(x_max + x_pad), x_max + x_pad * 1.8],
                     tickformat='d',
-                    range=[0, x_max * 1.12],
+                    labelalias={str(-v): str(v) for v in range(1, x_max + 2)},
                 ),
                 yaxis=dict(tickfont=dict(size=12, color='#111'), automargin=True),
                 legend=dict(
@@ -967,13 +963,12 @@ def main():
                     itemsizing='constant',
                 ),
                 height=fig_h,
-                margin=dict(t=90, b=70, l=20, r=80),
+                margin=dict(t=90, b=70, l=20, r=90),
                 paper_bgcolor='white', plot_bgcolor='white',
                 font=dict(family='Arial, sans-serif', size=13, color='#111'),
                 bargap=0.35,
             )
 
-            # subtle alternating row shading
             for i, pathway in enumerate(pw_df['Pathway']):
                 if i % 2 == 0:
                     fig_mirror.add_hrect(
