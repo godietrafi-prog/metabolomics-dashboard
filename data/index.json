@@ -21,6 +21,12 @@
       "researcher": "rafi@telhai.ac.il",
       "group_a": "ADHD",
       "group_b": "Control"
+    },
+    {
+      "project_id": "adhd_2026_300626",
+      "project_name": "ADHD 2026 (30.06.26)",
+      "date": "2026-06-30",
+      "researcher": "Dr. Rafi Steckler"
     }
   ]
 }
