@@ -486,30 +486,37 @@ def main():
         _default_b = [g for g in [GROUP_B] if g in all_groups] or [all_groups[min(1, len(all_groups)-1)]]
         with _comparison_container:
             st.subheader("🔀 Comparison Groups")
-            selected_a = st.multiselect("Group A", all_groups, default=_default_a, key='cmp_a',
-                                        help="Select one or more groups to treat as Group A")
-            selected_b = st.multiselect("vs Group B", all_groups, default=_default_b, key='cmp_b',
-                                        help="Select one or more groups to treat as Group B")
+            selected_a = st.multiselect("Group A (statistics)",
+                                        all_groups, default=_default_a, key='cmp_a',
+                                        help="Groups used as Group A in FC and significance tests")
+            selected_b = st.multiselect("Group B (statistics)",
+                                        all_groups, default=_default_b, key='cmp_b',
+                                        help="Groups used as Group B in FC and significance tests")
+            # remaining groups offered as display-only
+            _not_in_ab = [g for g in all_groups if g not in selected_a and g not in selected_b]
+            display_extra = st.multiselect("Additional groups (display only)",
+                                           _not_in_ab, default=_not_in_ab, key='cmp_extra',
+                                           help="Shown in charts alongside A and B — not included in statistics")
             _overlap = set(selected_a) & set(selected_b)
             if _overlap:
-                st.warning(f"Overlap: {', '.join(_overlap)} is in both groups.")
+                st.warning(f"Overlap: {', '.join(_overlap)} is in both A and B.")
             if not selected_a or not selected_b:
                 st.info("Select at least one group per side.")
                 selected_a = selected_a or _default_a
                 selected_b = selected_b or _default_b
-            st.caption(f"All groups ({len(all_groups)}): {' · '.join(all_groups)}")
-        # Update GROUP_A/GROUP_B to merged display labels
+        # Labels for stat-facing variables
         GROUP_A = " + ".join(selected_a)
         GROUP_B = " + ".join(selected_b)
-        # Colors for merged labels (use first group's color)
         COLORS[GROUP_A] = COLORS.get(selected_a[0], _PALETTE[0])
         COLORS[GROUP_B] = COLORS.get(selected_b[0], _PALETTE[1])
-        # Sample columns for the selected comparison
         adhd_cols    = [c for c in sample_cols if grp_norm.get(c) in selected_a]
         control_cols = [c for c in sample_cols if grp_norm.get(c) in selected_b]
+        extra_cols   = [c for c in sample_cols if grp_norm.get(c) in display_extra]
     else:
-        selected_a = [GROUP_A]
-        selected_b = [GROUP_B]
+        selected_a   = [GROUP_A]
+        selected_b   = [GROUP_B]
+        display_extra = []
+        extra_cols   = []
 
     DIR_A = f"↑ {GROUP_A}"
     DIR_B = f"↑ {GROUP_B}"
@@ -1216,7 +1223,7 @@ def main():
                          .nlargest(n_heat, '-log10p')['Original_Name'].tolist())
         heat_df = df[df['Original_Name'].isin(top_sig_names)].drop_duplicates('Original_Name').copy()
         if not heat_df.empty:
-            sorted_samp = adhd_cols + control_cols
+            sorted_samp = adhd_cols + extra_cols + control_cols
             sorted_idx  = [sample_cols.index(s) for s in sorted_samp if s in sample_cols]
             heat_vals   = heat_df[sample_cols].apply(pd.to_numeric, errors='coerce').values
             heat_log    = np.log10(np.clip(heat_vals, 1, None))[:,sorted_idx]
@@ -1228,11 +1235,15 @@ def main():
                 hovertemplate='%{y}<br>%{x}<br>log₁₀ intensity: %{z:.2f}<extra></extra>',
                 colorbar=dict(title=dict(text='log₁₀(intensity)', font=dict(size=12))),
             ))
-            fig_heat.add_vrect(x0=-0.5, x1=len(adhd_cols)-0.5,
-                               fillcolor="rgba(192,57,43,0.06)", line_width=0)
-            fig_heat.add_vrect(x0=len(adhd_cols)-0.5,
-                               x1=len(adhd_cols)+len(control_cols)-0.5,
-                               fillcolor="rgba(26,110,168,0.06)", line_width=0)
+            # shade each group band (A=red, extra=grey, B=blue)
+            _n_a, _n_e, _n_b = len(adhd_cols), len(extra_cols), len(control_cols)
+            for _x0, _x1, _fc in [
+                (-0.5, _n_a - 0.5,            "rgba(192,57,43,0.07)"),
+                (_n_a - 0.5, _n_a+_n_e - 0.5, "rgba(150,150,150,0.07)"),
+                (_n_a+_n_e - 0.5, _n_a+_n_e+_n_b - 0.5, "rgba(26,110,168,0.07)"),
+            ]:
+                if _x0 < _x1:
+                    fig_heat.add_vrect(x0=_x0, x1=_x1, fillcolor=_fc, line_width=0)
             fig_heat.update_layout(
                 height=max(500, n_heat * 17),
                 margin=dict(t=50,b=50),
