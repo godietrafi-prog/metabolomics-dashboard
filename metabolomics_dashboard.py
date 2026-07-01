@@ -933,10 +933,10 @@ def main():
             yaxis=dict(title='NOSC (Nominal Oxidation State of Carbon)',
                        tickfont_size=11, gridcolor='#eee'),
             height=max(420, len(hox_fc_sorted) * 18),
-            margin=dict(t=70, b=50, l=60, r=10),
+            margin=dict(t=70, b=90, l=60, r=10),
             paper_bgcolor='white', plot_bgcolor='white',
             font=dict(size=11, color='#111'),
-            legend=dict(orientation='h', x=0.5, xanchor='center', y=-0.12,
+            legend=dict(orientation='h', x=0.5, xanchor='center', y=-0.22,
                         font_size=11),
         )
         col_scatter.plotly_chart(fig_scat, use_container_width=True)
@@ -1069,12 +1069,12 @@ def main():
                 ),
                 yaxis=dict(tickfont=dict(size=12, color='#111'), automargin=True),
                 legend=dict(
-                    orientation='h', x=0.5, y=-0.08, xanchor='center',
+                    orientation='h', x=0.5, y=-0.15, xanchor='center',
                     font=dict(size=13), bgcolor='rgba(0,0,0,0)',
                     itemsizing='constant',
                 ),
                 height=fig_h,
-                margin=dict(t=90, b=70, l=20, r=90),
+                margin=dict(t=90, b=100, l=20, r=90),
                 paper_bgcolor='white', plot_bgcolor='white',
                 font=dict(family='Arial, sans-serif', size=13, color='#111'),
                 bargap=0.35,
