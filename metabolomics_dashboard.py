@@ -123,7 +123,8 @@ def load_meta(project_id: str) -> dict:
         "researcher": "",
         "date": "",
         "notes": "",
-        "institution": "Tel-Hai University",
+        "institution": "",
+        "lab": "",
     }
     if not os.path.exists(path):
         return defaults
@@ -443,7 +444,8 @@ def main():
         show_adj    = st.checkbox("Use adjusted p-value (FDR)", value=False)
 
         st.divider()
-        st.caption(f"MetaFlow · Tel-Hai University · {meta.get('date', '2026')[:4]}")
+        _footer_inst = meta.get('institution', '') or 'MetaFlow'
+        st.caption(f"MetaFlow · {_footer_inst} · {meta.get('date', '2026')[:4]}")
 
     # ── Load data ────────────────────────────────────────────────────────────
     insights_path, groups_path = project_paths(selected_id)
@@ -463,31 +465,51 @@ def main():
     GROUP_A = meta.get("group_a") or inferred_den   # denominator = "elevated in GROUP_A" when FC < 0
     GROUP_B = meta.get("group_b") or inferred_num   # numerator
 
-    DIR_A = f"↑ {GROUP_A}"    # e.g. "↑ ADHD"
-    DIR_B = f"↑ {GROUP_B}"    # e.g. "↑ Control"
+    # ── Build grp_norm preserving ALL group names ─────────────────────────────
+    # Canonical names from any group_* field in meta.json (covers group_a, group_b, group_c …)
+    meta_canonical = {meta[k].upper(): meta[k]
+                      for k in meta if k.startswith('group_') and meta.get(k)}
+    grp_norm = {k: meta_canonical.get(v, v) for k, v in group_map.items()}
+    all_groups = sorted(set(grp_norm.values()), key=str.casefold)
 
-    COLORS = {
-        GROUP_A: "#c0392b",
-        GROUP_B: "#1a6ea8",
-        "neutral": "#7f8c8d",
-    }
+    # ── Multi-group: sidebar comparison selector ──────────────────────────────
+    if len(all_groups) > 2:
+        with st.sidebar:
+            st.divider()
+            st.subheader("🔀 Comparison Pair")
+            _a_idx = all_groups.index(GROUP_A) if GROUP_A in all_groups else 0
+            _b_idx = all_groups.index(GROUP_B) if GROUP_B in all_groups else min(1, len(all_groups) - 1)
+            GROUP_A = st.selectbox("Group A", all_groups, index=_a_idx, key='cmp_a')
+            GROUP_B = st.selectbox("vs Group B", all_groups, index=_b_idx, key='cmp_b')
+            st.caption(f"{len(all_groups)} groups: {' · '.join(all_groups)}")
+
+    DIR_A = f"↑ {GROUP_A}"
+    DIR_B = f"↑ {GROUP_B}"
+
+    # Color palette — GROUP_A always red, GROUP_B always blue, extras get distinct colors
+    _PALETTE = ["#c0392b", "#1a6ea8", "#27ae60", "#e67e22", "#8e44ad", "#16a085", "#f39c12"]
+    _other   = [g for g in all_groups if g not in (GROUP_A, GROUP_B)]
+    COLORS   = {"neutral": "#7f8c8d"}
+    for _i, _g in enumerate([GROUP_A, GROUP_B] + _other):
+        COLORS[_g] = _PALETTE[_i % len(_PALETTE)]
 
     # ── Page header ──────────────────────────────────────────────────────────
-    proj_title    = meta.get("project_name", "Metabolomics Dashboard")
-    proj_subtitle = (f"{GROUP_A} vs {GROUP_B} · "
-                     f"{meta.get('institution', 'Tel-Hai University')} · "
-                     f"Nutrition &amp; Bioinformatics Lab")
+    proj_title = meta.get("project_name", "Metabolomics Dashboard")
+    _institution = meta.get('institution', '')
+    _lab         = meta.get('lab', '')
+    if len(all_groups) > 2:
+        _groups_str = " · ".join(all_groups)
+    else:
+        _groups_str = f"{GROUP_A} vs {GROUP_B}"
+    _subtitle_parts = [p for p in [_groups_str, _institution, _lab] if p]
+    proj_subtitle = " · ".join(_subtitle_parts)
     st.markdown(f"""
     <div class="main-header">
         <h1>🧬 {proj_title}</h1>
         <p>{proj_subtitle}</p>
     </div>""", unsafe_allow_html=True)
 
-    # ── Build group membership ────────────────────────────────────────────────
-    grp_norm = {
-        k: (GROUP_A if v.upper() == GROUP_A.upper() else GROUP_B)
-        for k, v in group_map.items()
-    }
+    # ── Sample columns per group (comparison pair only for stats) ─────────────
     adhd_cols    = [c for c in sample_cols if grp_norm.get(c) == GROUP_A]
     control_cols = [c for c in sample_cols if grp_norm.get(c) == GROUP_B]
 
