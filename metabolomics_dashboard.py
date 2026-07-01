@@ -849,36 +849,97 @@ def main():
             <div class="value" style="color:#555">{n_hox_ns}</div>
             <div class="label">Not significant</div></div>""", unsafe_allow_html=True)
 
-        # Log2FC bar chart for top high-OC compounds (only those with FC data)
+        # ── split into two columns ────────────────────────────────────────────
+        col_bar, col_scatter = st.columns([1, 1])
+
+        def _trunc(s, n=25):
+            s = str(s) if pd.notna(s) else ''
+            return s if len(s) <= n else s[:n] + '…'
+
+        # LEFT — Log2FC bar chart (top 30 by O/C ratio, truncated names)
         hox_fc = high_ox[high_ox[fc_col].notna() & high_ox[pval_col].notna()].copy()
         hox_fc = hox_fc.drop_duplicates(subset=[name_col]).nlargest(30, 'OC_Ratio')
         hox_fc['label_color'] = hox_fc['_direction'].map(
             {DIR_A: COLORS[GROUP_A], DIR_B: COLORS[GROUP_B], 'n/s': '#aaa'})
+        hox_fc['short_name'] = hox_fc[name_col].apply(_trunc)
+        hox_fc['full_name']  = hox_fc[name_col].astype(str)
         hox_fc_sorted = hox_fc.sort_values(fc_col)
         fig_hox = go.Figure(go.Bar(
             x=hox_fc_sorted[fc_col],
-            y=hox_fc_sorted[name_col],
+            y=hox_fc_sorted['short_name'],
             orientation='h',
             marker_color=hox_fc_sorted['label_color'].tolist(),
-            hovertemplate='<b>%{y}</b><br>Log₂FC: %{x:.2f}<extra></extra>',
+            customdata=hox_fc_sorted[['full_name', 'OC_Ratio']].values,
+            hovertemplate='<b>%{customdata[0]}</b><br>Log₂FC: %{x:.2f}<br>O/C: %{customdata[1]:.3f}<extra></extra>',
         ))
         fig_hox.add_vline(x=0, line_color='#333', line_width=1.5)
         fig_hox.add_vline(x= fc_thresh, line_dash='dash', line_color='#888', line_width=1)
         fig_hox.add_vline(x=-fc_thresh, line_dash='dash', line_color='#888', line_width=1)
         fig_hox.update_layout(
-            title=dict(text=f'Top 30 High-Oxidation Compounds (O/C > 0.6) — Log₂ Fold Change<br>'
+            title=dict(text=f'Top 30 High-OC Compounds — Log₂ FC<br>'
                             f'<sup style="color:{COLORS[GROUP_A]}">■ {DIR_A}</sup>&nbsp;&nbsp;'
                             f'<sup style="color:{COLORS[GROUP_B]}">■ {DIR_B}</sup>&nbsp;&nbsp;'
-                            '<sup style="color:#aaa">■ n/s</sup>', font_size=14),
-            xaxis=dict(title=f'Log₂ FC ({GROUP_B} / {GROUP_A})', tickfont_size=12,
+                            '<sup style="color:#aaa">■ n/s</sup>', font_size=13),
+            xaxis=dict(title=f'Log₂ FC', tickfont_size=11,
                        zeroline=True, zerolinecolor='#333'),
-            yaxis=dict(tickfont_size=11),
-            height=max(400, len(hox_fc_sorted) * 20),
-            margin=dict(t=80, b=30, l=10, r=20),
+            yaxis=dict(tickfont_size=11, ticklabelposition='outside',
+                       automargin=False),
+            height=max(420, len(hox_fc_sorted) * 18),
+            margin=dict(t=70, b=30, l=210, r=10),
             paper_bgcolor='white', plot_bgcolor='#fafafa',
-            font=dict(size=12, color='#111'),
+            font=dict(size=11, color='#111'),
         )
-        st.plotly_chart(fig_hox, use_container_width=True)
+        col_bar.plotly_chart(fig_hox, use_container_width=True)
+
+        # RIGHT — O/C ratio vs NOSC scatter (oxidation fingerprint)
+        scatter_df = oc_df[oc_df['NOSC'].notna() & oc_df[fc_col].notna()].copy()
+        scatter_df['short_name'] = scatter_df[name_col].apply(_trunc)
+        scatter_df['color'] = scatter_df['_direction'].map(
+            {DIR_A: COLORS[GROUP_A], DIR_B: COLORS[GROUP_B], 'n/s': 'rgba(180,180,180,0.45)'})
+        scatter_df['size'] = scatter_df['_direction'].map(
+            {DIR_A: 8, DIR_B: 8, 'n/s': 4})
+        _dir_order = ['n/s', DIR_B, DIR_A]
+        scatter_df = scatter_df.sort_values('_direction',
+            key=lambda s: s.map({d: i for i, d in enumerate(_dir_order)}).fillna(0))
+        fig_scat = go.Figure()
+        for _dir, _col, _sz in [('n/s', 'rgba(180,180,180,0.4)', 4),
+                                  (DIR_B, COLORS[GROUP_B], 8),
+                                  (DIR_A, COLORS[GROUP_A], 8)]:
+            sub = scatter_df[scatter_df['_direction'] == _dir]
+            if sub.empty: continue
+            fig_scat.add_trace(go.Scatter(
+                x=sub['OC_Ratio'], y=sub['NOSC'],
+                mode='markers',
+                name=_dir,
+                marker=dict(color=_col, size=_sz, opacity=0.75,
+                            line=dict(width=0.4, color='white')),
+                customdata=sub[['short_name', fc_col, 'OC_Ratio', 'NOSC']].values,
+                hovertemplate=(
+                    '<b>%{customdata[0]}</b><br>'
+                    'O/C: %{customdata[2]:.3f}<br>'
+                    'NOSC: %{customdata[3]:.3f}<br>'
+                    'Log₂FC: %{customdata[1]:.2f}<extra></extra>'
+                ),
+            ))
+        fig_scat.add_hline(y=0, line_dash='dot', line_color='#999', line_width=1)
+        fig_scat.add_vline(x=0.6, line_dash='dash', line_color='#1a1a8c',
+                           line_width=1, annotation_text='O/C=0.6',
+                           annotation_font_size=10)
+        fig_scat.update_layout(
+            title=dict(text='Oxidation Fingerprint — O/C ratio vs NOSC<br>'
+                            '<sup style="color:#555">All compounds with oxidation data</sup>',
+                       font_size=13),
+            xaxis=dict(title='O/C Ratio', tickfont_size=11, gridcolor='#eee'),
+            yaxis=dict(title='NOSC (Nominal Oxidation State of Carbon)',
+                       tickfont_size=11, gridcolor='#eee'),
+            height=max(420, len(hox_fc_sorted) * 18),
+            margin=dict(t=70, b=50, l=60, r=10),
+            paper_bgcolor='white', plot_bgcolor='white',
+            font=dict(size=11, color='#111'),
+            legend=dict(orientation='h', x=0.5, xanchor='center', y=-0.12,
+                        font_size=11),
+        )
+        col_scatter.plotly_chart(fig_scat, use_container_width=True)
 
         with st.expander(f"📋 All {len(high_ox)} highly-oxidised compounds (O/C > 0.6)"):
             show = [name_col,'OC_Ratio','NOSC', fc_col, pval_col, '_direction','Main_Categories','Clinical_Tags']
