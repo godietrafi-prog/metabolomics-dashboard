@@ -405,6 +405,8 @@ def main():
             if meta['notes']:      st.caption(meta['notes'])
 
         st.divider()
+        _comparison_container = st.container()   # filled later after data is loaded
+        st.divider()
         st.header("🧪 Statistical Method")
         STAT_OPTIONS = [
             "Precomputed (Mann-Whitney U)",
@@ -472,26 +474,45 @@ def main():
     grp_norm = {k: meta_canonical.get(v, v) for k, v in group_map.items()}
     all_groups = sorted(set(grp_norm.values()), key=str.casefold)
 
-    # ── Multi-group: sidebar comparison selector ──────────────────────────────
-    if len(all_groups) > 2:
-        with st.sidebar:
-            st.divider()
-            st.subheader("🔀 Comparison Pair")
-            _a_idx = all_groups.index(GROUP_A) if GROUP_A in all_groups else 0
-            _b_idx = all_groups.index(GROUP_B) if GROUP_B in all_groups else min(1, len(all_groups) - 1)
-            GROUP_A = st.selectbox("Group A", all_groups, index=_a_idx, key='cmp_a')
-            GROUP_B = st.selectbox("vs Group B", all_groups, index=_b_idx, key='cmp_b')
-            st.caption(f"{len(all_groups)} groups: {' · '.join(all_groups)}")
-
-    DIR_A = f"↑ {GROUP_A}"
-    DIR_B = f"↑ {GROUP_B}"
-
-    # Color palette — GROUP_A always red, GROUP_B always blue, extras get distinct colors
+    # ── Comparison selector (fills the sidebar container reserved above) ────────
     _PALETTE = ["#c0392b", "#1a6ea8", "#27ae60", "#e67e22", "#8e44ad", "#16a085", "#f39c12"]
     _other   = [g for g in all_groups if g not in (GROUP_A, GROUP_B)]
     COLORS   = {"neutral": "#7f8c8d"}
     for _i, _g in enumerate([GROUP_A, GROUP_B] + _other):
         COLORS[_g] = _PALETTE[_i % len(_PALETTE)]
+
+    if len(all_groups) > 2:
+        _default_a = [g for g in [GROUP_A] if g in all_groups] or [all_groups[0]]
+        _default_b = [g for g in [GROUP_B] if g in all_groups] or [all_groups[min(1, len(all_groups)-1)]]
+        with _comparison_container:
+            st.subheader("🔀 Comparison Groups")
+            selected_a = st.multiselect("Group A", all_groups, default=_default_a, key='cmp_a',
+                                        help="Select one or more groups to treat as Group A")
+            selected_b = st.multiselect("vs Group B", all_groups, default=_default_b, key='cmp_b',
+                                        help="Select one or more groups to treat as Group B")
+            _overlap = set(selected_a) & set(selected_b)
+            if _overlap:
+                st.warning(f"Overlap: {', '.join(_overlap)} is in both groups.")
+            if not selected_a or not selected_b:
+                st.info("Select at least one group per side.")
+                selected_a = selected_a or _default_a
+                selected_b = selected_b or _default_b
+            st.caption(f"All groups ({len(all_groups)}): {' · '.join(all_groups)}")
+        # Update GROUP_A/GROUP_B to merged display labels
+        GROUP_A = " + ".join(selected_a)
+        GROUP_B = " + ".join(selected_b)
+        # Colors for merged labels (use first group's color)
+        COLORS[GROUP_A] = COLORS.get(selected_a[0], _PALETTE[0])
+        COLORS[GROUP_B] = COLORS.get(selected_b[0], _PALETTE[1])
+        # Sample columns for the selected comparison
+        adhd_cols    = [c for c in sample_cols if grp_norm.get(c) in selected_a]
+        control_cols = [c for c in sample_cols if grp_norm.get(c) in selected_b]
+    else:
+        selected_a = [GROUP_A]
+        selected_b = [GROUP_B]
+
+    DIR_A = f"↑ {GROUP_A}"
+    DIR_B = f"↑ {GROUP_B}"
 
     # ── Page header ──────────────────────────────────────────────────────────
     proj_title = meta.get("project_name", "Metabolomics Dashboard")
@@ -509,9 +530,10 @@ def main():
         <p>{proj_subtitle}</p>
     </div>""", unsafe_allow_html=True)
 
-    # ── Sample columns per group (comparison pair only for stats) ─────────────
-    adhd_cols    = [c for c in sample_cols if grp_norm.get(c) == GROUP_A]
-    control_cols = [c for c in sample_cols if grp_norm.get(c) == GROUP_B]
+    # ── Sample columns per comparison (2-group case; multi-group set above) ─────
+    if len(all_groups) <= 2:
+        adhd_cols    = [c for c in sample_cols if grp_norm.get(c) in selected_a]
+        control_cols = [c for c in sample_cols if grp_norm.get(c) in selected_b]
 
     name_col = 'Name' if 'Name' in df.columns else 'Original_Name'
 
