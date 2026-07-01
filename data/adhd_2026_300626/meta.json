@@ -2,10 +2,11 @@
   "project_id": "adhd_2026_300626",
   "project_name": "ADHD 2026 (30.06.26)",
   "group_a": "ADHD",
-  "group_b": "CONTROL",
+  "group_b": "Control",
   "researcher": "Dr. Rafi Steckler",
   "researcher_email": "rafi@telhai.ac.il",
   "date": "2026-06-30",
   "notes": "",
-  "institution": "Tel-Hai University"
+  "institution": "Tel-Hai University",
+  "lab": "Center for Metabolomics Analytics"
 }
