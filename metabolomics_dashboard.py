@@ -4,6 +4,7 @@ Multi-project dashboard — project selected via URL query param ?project=<id>
 """
 
 import os
+import io
 import json
 import streamlit as st
 import pandas as pd
@@ -122,7 +123,8 @@ def load_meta(project_id: str) -> dict:
         "researcher": "",
         "date": "",
         "notes": "",
-        "institution": "Tel-Hai University",
+        "institution": "",
+        "lab": "",
     }
     if not os.path.exists(path):
         return defaults
@@ -300,6 +302,70 @@ def run_normality_test(data_json: str, adhd_cols: tuple, control_cols: tuple) ->
     }
 
 
+# ─── Download helpers ─────────────────────────────────────────────────────────
+
+EXPORT_BASE = [
+    'Original_Name', 'Formula_Final', 'MW_Final', 'HMDB_ID', 'KEGG_ID_Final',
+    'Main_Categories', 'LM_Category', 'LM_Main_Class', 'LM_Sub_Class',
+    'OC_Ratio', 'NOSC', 'KEGG_Pathways', 'Neuro_Trap', 'Clinical_Tags', 'Structural_Tags',
+]
+
+
+def to_csv(df: pd.DataFrame) -> bytes:
+    return df.to_csv(index=False).encode('utf-8')
+
+
+def to_excel(df: pd.DataFrame) -> bytes:
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine='openpyxl') as w:
+        df.to_excel(w, index=False)
+    return buf.getvalue()
+
+
+def export_cols(df: pd.DataFrame, name_col: str, fc_col: str, pval_col: str) -> list:
+    stat_cols = [fc_col, pval_col, '_direction']
+    cols = [name_col] + stat_cols + [c for c in EXPORT_BASE if c in df.columns and c != name_col]
+    return [c for c in cols if c in df.columns]
+
+
+def build_metaboanalyst(df: pd.DataFrame, sample_cols: list, grp_norm: dict):
+    """Build MetaboAnalyst peak table and metadata DataFrames."""
+    def best_id(row):
+        pubchem = str(row.get('PubChem_CID', '') or '').strip()
+        hmdb    = str(row.get('HMDB_ID',     '') or '').strip()
+        kegg    = str(row.get('KEGG_ID_Final','') or '').strip()
+        if pubchem and pubchem not in ('nan', '-', ''):
+            try:
+                return str(int(float(pubchem)))
+            except (ValueError, OverflowError):
+                pass
+        if hmdb.startswith('HMDB') and len(hmdb) > 4:
+            return hmdb
+        if kegg and kegg not in ('-', 'nan', ''):
+            return kegg
+        return None
+
+    df2 = df.copy()
+    df2['_ma_id'] = df2.apply(best_id, axis=1)
+    included   = df2[df2['_ma_id'].notna()].copy()
+    n_excluded = len(df2) - len(included)
+
+    peak_rows = []
+    for _, row in included.iterrows():
+        r = {'PubChem_CID': row['_ma_id']}
+        for s in sample_cols:
+            val = pd.to_numeric(row.get(s, np.nan), errors='coerce')
+            r[s] = 0 if pd.isna(val) else val
+        peak_rows.append(r)
+    peak_table = pd.DataFrame(peak_rows)
+
+    meta = pd.DataFrame([
+        {'Sample': s, 'Group': grp_norm.get(s, 'Unknown')}
+        for s in sample_cols
+    ])
+    return peak_table, meta, len(included), n_excluded
+
+
 # ─── Main app ─────────────────────────────────────────────────────────────────
 
 def main():
@@ -338,6 +404,8 @@ def main():
             if meta['date']:       st.caption(f"Date: {meta['date']}")
             if meta['notes']:      st.caption(meta['notes'])
 
+        st.divider()
+        _comparison_container = st.container()   # filled later after data is loaded
         st.divider()
         st.header("🧪 Statistical Method")
         STAT_OPTIONS = [
@@ -378,7 +446,8 @@ def main():
         show_adj    = st.checkbox("Use adjusted p-value (FDR)", value=False)
 
         st.divider()
-        st.caption(f"MetaFlow · Tel-Hai University · {meta.get('date', '2026')[:4]}")
+        _footer_inst = meta.get('institution', '') or 'MetaFlow'
+        st.caption(f"MetaFlow · {_footer_inst} · {meta.get('date', '2026')[:4]}")
 
     # ── Load data ────────────────────────────────────────────────────────────
     insights_path, groups_path = project_paths(selected_id)
@@ -393,50 +462,97 @@ def main():
     pval_col = pval_col or 'P-value: (Control) / (ADHD)'
     adjp_col = adjp_col or 'Adj. P-value: (Control) / (ADHD)'
 
-    # Group names: meta.json → FC column header → groups.xlsx unique values
+    # Group names from meta.json (authoritative) or inferred from FC column header
     inferred_num, inferred_den = groups_from_fc_col(fc_col)
-    _meta_a = meta.get("group_a", "")
-    _meta_b = meta.get("group_b", "")
+    # Ignore placeholder defaults ("Group A"/"Group B") — fall through to FC-column inference
+    _raw_ga = meta.get("group_a", "")
+    _raw_gb = meta.get("group_b", "")
+    GROUP_A = (_raw_ga if _raw_ga not in ("", "Group A") else None) or inferred_den or "Group A"
+    GROUP_B = (_raw_gb if _raw_gb not in ("", "Group B") else None) or inferred_num or "Group B"
 
-    # If meta.json still has placeholder defaults, detect from groups.xlsx instead
-    _DEFAULTS = {"group a", "group b", "groupa", "groupb", ""}
-    if _meta_a.lower().replace(" ", "") in _DEFAULTS or _meta_b.lower().replace(" ", "") in _DEFAULTS:
-        _detected = sorted({str(v) for v in group_map.values()}, key=str.casefold)
-        if len(_detected) >= 1:
-            _meta_a = _meta_a if _meta_a.lower().replace(" ", "") not in _DEFAULTS else _detected[0]
-        if len(_detected) >= 2:
-            _meta_b = _meta_b if _meta_b.lower().replace(" ", "") not in _DEFAULTS else _detected[1]
+    # ── Build grp_norm preserving ALL group names ─────────────────────────────
+    # Canonical names from any group_* field in meta.json (covers group_a, group_b, group_c …)
+    meta_canonical = {meta[k].upper(): meta[k]
+                      for k in meta if k.startswith('group_') and meta.get(k)}
+    grp_norm = {k: meta_canonical.get(v, v) for k, v in group_map.items()}
+    all_groups = sorted(set(grp_norm.values()), key=str.casefold)
 
-    GROUP_A = _meta_a or inferred_den   # denominator = "elevated in GROUP_A" when FC < 0
-    GROUP_B = _meta_b or inferred_num   # numerator
+    # If GROUP_A/B don't match any actual group, auto-correct (case-insensitive, then index)
+    if all_groups:
+        if GROUP_A not in all_groups:
+            GROUP_A = next((g for g in all_groups if g.upper() == GROUP_A.upper()), all_groups[0])
+        if GROUP_B not in all_groups:
+            _rem = [g for g in all_groups if g != GROUP_A]
+            GROUP_B = next((g for g in _rem if g.upper() == GROUP_B.upper()),
+                           _rem[0] if _rem else all_groups[0])
 
-    DIR_A = f"↑ {GROUP_A}"    # e.g. "↑ ADHD"
-    DIR_B = f"↑ {GROUP_B}"    # e.g. "↑ Control"
+    # ── Comparison selector (fills the sidebar container reserved above) ────────
+    _PALETTE = ["#c0392b", "#1a6ea8", "#27ae60", "#e67e22", "#8e44ad", "#16a085", "#f39c12"]
+    _other   = [g for g in all_groups if g not in (GROUP_A, GROUP_B)]
+    COLORS   = {"neutral": "#7f8c8d"}
+    for _i, _g in enumerate([GROUP_A, GROUP_B] + _other):
+        COLORS[_g] = _PALETTE[_i % len(_PALETTE)]
 
-    COLORS = {
-        GROUP_A: "#c0392b",
-        GROUP_B: "#1a6ea8",
-        "neutral": "#7f8c8d",
-    }
+    if len(all_groups) > 2:
+        _default_a = [g for g in [GROUP_A] if g in all_groups] or [all_groups[0]]
+        _default_b = [g for g in [GROUP_B] if g in all_groups] or [all_groups[min(1, len(all_groups)-1)]]
+        with _comparison_container:
+            st.subheader("🔀 Comparison Groups")
+            selected_a = st.multiselect("Group A (statistics)",
+                                        all_groups, default=_default_a, key='cmp_a',
+                                        help="Groups used as Group A in FC and significance tests")
+            selected_b = st.multiselect("Group B (statistics)",
+                                        all_groups, default=_default_b, key='cmp_b',
+                                        help="Groups used as Group B in FC and significance tests")
+            # remaining groups offered as display-only
+            _not_in_ab = [g for g in all_groups if g not in selected_a and g not in selected_b]
+            display_extra = st.multiselect("Additional groups (display only)",
+                                           _not_in_ab, default=_not_in_ab, key='cmp_extra',
+                                           help="Shown in charts alongside A and B — not included in statistics")
+            _overlap = set(selected_a) & set(selected_b)
+            if _overlap:
+                st.warning(f"Overlap: {', '.join(_overlap)} is in both A and B.")
+            if not selected_a or not selected_b:
+                st.info("Select at least one group per side.")
+                selected_a = selected_a or _default_a
+                selected_b = selected_b or _default_b
+        # Labels for stat-facing variables
+        GROUP_A = " + ".join(selected_a)
+        GROUP_B = " + ".join(selected_b)
+        COLORS[GROUP_A] = COLORS.get(selected_a[0], _PALETTE[0])
+        COLORS[GROUP_B] = COLORS.get(selected_b[0], _PALETTE[1])
+        adhd_cols    = [c for c in sample_cols if grp_norm.get(c) in selected_a]
+        control_cols = [c for c in sample_cols if grp_norm.get(c) in selected_b]
+        extra_cols   = [c for c in sample_cols if grp_norm.get(c) in display_extra]
+    else:
+        selected_a   = [GROUP_A]
+        selected_b   = [GROUP_B]
+        display_extra = []
+        extra_cols   = []
+
+    DIR_A = f"↑ {GROUP_A}"
+    DIR_B = f"↑ {GROUP_B}"
 
     # ── Page header ──────────────────────────────────────────────────────────
-    proj_title    = meta.get("project_name", "Metabolomics Dashboard")
-    proj_subtitle = (f"{GROUP_A} vs {GROUP_B} · "
-                     f"{meta.get('institution', 'Tel-Hai University')} · "
-                     f"Nutrition &amp; Bioinformatics Lab")
+    proj_title = meta.get("project_name", "Metabolomics Dashboard")
+    _institution = meta.get('institution', '')
+    _lab         = meta.get('lab', '')
+    if len(all_groups) > 2:
+        _groups_str = " · ".join(all_groups)
+    else:
+        _groups_str = f"{GROUP_A} vs {GROUP_B}"
+    _subtitle_parts = [p for p in [_groups_str, _institution, _lab] if p]
+    proj_subtitle = " · ".join(_subtitle_parts)
     st.markdown(f"""
     <div class="main-header">
         <h1>🧬 {proj_title}</h1>
         <p>{proj_subtitle}</p>
     </div>""", unsafe_allow_html=True)
 
-    # ── Build group membership ────────────────────────────────────────────────
-    grp_norm = {
-        k: (GROUP_A if v.upper() == GROUP_A.upper() else GROUP_B)
-        for k, v in group_map.items()
-    }
-    adhd_cols    = [c for c in sample_cols if grp_norm.get(c) == GROUP_A]
-    control_cols = [c for c in sample_cols if grp_norm.get(c) == GROUP_B]
+    # ── Sample columns per comparison (2-group case; multi-group set above) ─────
+    if len(all_groups) <= 2:
+        adhd_cols    = [c for c in sample_cols if grp_norm.get(c) in selected_a]
+        control_cols = [c for c in sample_cols if grp_norm.get(c) in selected_b]
 
     name_col = 'Name' if 'Name' in df.columns else 'Original_Name'
 
@@ -489,6 +605,7 @@ def main():
         "🧠 Neurochemistry",
         f"📈 {GROUP_A} vs {GROUP_B}",
         "🔍 Compound Explorer",
+        "📥 Downloads & Exports",
     ])
 
     # ═════════════════════════════════════════════════════════════════════════
@@ -744,34 +861,45 @@ def main():
             <div class="value" style="color:#555">{n_hox_ns}</div>
             <div class="label">Not significant</div></div>""", unsafe_allow_html=True)
 
-        # Log2FC bar chart for top high-OC compounds (only those with FC data)
+        # ── split into two columns ────────────────────────────────────────────
+        col_bar, col_scatter = st.columns([1, 1])
+
+        def _trunc(s, n=25):
+            s = str(s) if pd.notna(s) else ''
+            return s if len(s) <= n else s[:n] + '…'
+
+        # LEFT — Log2FC bar chart (top 30 by O/C ratio, truncated names)
         hox_fc = high_ox[high_ox[fc_col].notna() & high_ox[pval_col].notna()].copy()
         hox_fc = hox_fc.drop_duplicates(subset=[name_col]).nlargest(30, 'OC_Ratio')
         hox_fc['label_color'] = hox_fc['_direction'].map(
             {DIR_A: COLORS[GROUP_A], DIR_B: COLORS[GROUP_B], 'n/s': '#aaa'})
+        hox_fc['short_name'] = hox_fc[name_col].apply(_trunc)
+        hox_fc['full_name']  = hox_fc[name_col].astype(str)
         hox_fc_sorted = hox_fc.sort_values(fc_col)
         fig_hox = go.Figure(go.Bar(
             x=hox_fc_sorted[fc_col],
-            y=hox_fc_sorted[name_col],
+            y=hox_fc_sorted['short_name'],
             orientation='h',
             marker_color=hox_fc_sorted['label_color'].tolist(),
-            hovertemplate='<b>%{y}</b><br>Log₂FC: %{x:.2f}<extra></extra>',
+            customdata=hox_fc_sorted[['full_name', 'OC_Ratio']].values,
+            hovertemplate='<b>%{customdata[0]}</b><br>Log₂FC: %{x:.2f}<br>O/C: %{customdata[1]:.3f}<extra></extra>',
         ))
         fig_hox.add_vline(x=0, line_color='#333', line_width=1.5)
         fig_hox.add_vline(x= fc_thresh, line_dash='dash', line_color='#888', line_width=1)
         fig_hox.add_vline(x=-fc_thresh, line_dash='dash', line_color='#888', line_width=1)
         fig_hox.update_layout(
-            title=dict(text=f'Top 30 High-Oxidation Compounds (O/C > 0.6) — Log₂ Fold Change<br>'
+            title=dict(text=f'Top 30 High-OC Compounds — Log₂ FC<br>'
                             f'<sup style="color:{COLORS[GROUP_A]}">■ {DIR_A}</sup>&nbsp;&nbsp;'
                             f'<sup style="color:{COLORS[GROUP_B]}">■ {DIR_B}</sup>&nbsp;&nbsp;'
-                            '<sup style="color:#aaa">■ n/s</sup>', font_size=14),
-            xaxis=dict(title=f'Log₂ FC ({GROUP_B} / {GROUP_A})', tickfont_size=12,
+                            '<sup style="color:#aaa">■ n/s</sup>', font_size=13),
+            xaxis=dict(title=f'Log₂ FC', tickfont_size=11,
                        zeroline=True, zerolinecolor='#333'),
-            yaxis=dict(tickfont_size=11),
-            height=max(400, len(hox_fc_sorted) * 20),
-            margin=dict(t=80, b=30, l=10, r=20),
+            yaxis=dict(tickfont_size=11, ticklabelposition='outside',
+                       automargin=False),
+            height=max(420, len(hox_fc_sorted) * 18),
+            margin=dict(t=70, b=30, l=210, r=10),
             paper_bgcolor='white', plot_bgcolor='#fafafa',
-            font=dict(size=12, color='#111'),
+            font=dict(size=11, color='#111'),
         )
         col_bar.plotly_chart(fig_hox, use_container_width=True)
 
@@ -837,26 +965,31 @@ def main():
     # ═════════════════════════════════════════════════════════════════════════
     with tabs[3]:
         kegg_df = df[df['KEGG_Pathways'].notna() & (df['KEGG_Pathways'] != '-')].copy()
-        st.markdown(f"### {len(kegg_df):,} compounds mapped to KEGG pathways")
 
-        # ── build full per-pathway counts (all pathways) ──────────────────
+        # ── build per-pathway counts ──────────────────────────────────────
         path_all = Counter()
-        path_a   = Counter()
-        path_b   = Counter()
+        path_a   = Counter()   # ↑ GROUP_A (higher in research group)
+        path_b   = Counter()   # ↑ GROUP_B (lower in research group)
         for _, row in kegg_df.iterrows():
             paths = [p.strip() for p in str(row['KEGG_Pathways']).split(';') if p.strip()]
-            fc = row.get(fc_col, np.nan)
-            pv = row.get(p_use,  np.nan)
-            is_a_up = pd.notna(fc) and pd.notna(pv) and fc < -fc_thresh and pv < pval_thresh
-            is_b_up = pd.notna(fc) and pd.notna(pv) and fc >  fc_thresh and pv < pval_thresh
+            direction = row.get('_direction', '')
             for p in paths:
                 path_all[p] += 1
-                if is_a_up: path_a[p] += 1
-                if is_b_up: path_b[p] += 1
+                if direction == DIR_A: path_a[p] += 1
+                if direction == DIR_B: path_b[p] += 1
 
         all_pathway_names = [p for p, _ in path_all.most_common()]
+        n_sig_kegg = int((kegg_df['_direction'] != 'n/s').sum())
 
-        # ── controls ─────────────────────────────────────────────────────
+        pv_label = "Any" if pval_thresh >= 1.0 else f"p<{pval_thresh}"
+        fc_label = f"|FC|≥{fc_thresh}" if fc_thresh > 0 else "any FC"
+
+        st.markdown(
+            f"### {len(kegg_df):,} compounds mapped to KEGG pathways "
+            f"— **{n_sig_kegg}** significant ({fc_label}, {pv_label})"
+        )
+
+        # ── pathway selector ──────────────────────────────────────────────
         selected_paths = st.multiselect(
             "Pathways to display (add or remove freely):",
             options=all_pathway_names,
@@ -867,99 +1000,86 @@ def main():
         if not selected_paths:
             st.info("Select at least one pathway to display the chart.")
         else:
-            # ── build chart dataframe ─────────────────────────────────────
             pw_df = pd.DataFrame({
-                'Pathway':  selected_paths,
-                'A_n':      [path_a[p]   for p in selected_paths],
-                'B_n':      [path_b[p]   for p in selected_paths],
-                'Total':    [path_all[p] for p in selected_paths],
-            }).sort_values('A_n')   # sort by group A count ascending → biggest at top
+                'Pathway': selected_paths,
+                'A_n':     [path_a[p] for p in selected_paths],   # ↑ GROUP_A (right)
+                'B_n':     [path_b[p] for p in selected_paths],   # ↑ GROUP_B (left)
+                'Total':   [path_all[p] for p in selected_paths],
+            })
+            pw_df['Sig_total'] = pw_df['A_n'] + pw_df['B_n']
+            pw_df = pw_df.sort_values('Sig_total')   # most significant at top
 
-            bar_h   = max(28, min(48, 600 // max(len(pw_df), 1)))
-            fig_h   = max(420, len(pw_df) * bar_h + 160)
-            pv_label = "Any" if pval_thresh >= 1.0 else f"p<{pval_thresh}"
-            fc_label = f"|FC|≥{fc_thresh}" if fc_thresh > 0 else "any FC"
+            bar_h = max(28, min(48, 600 // max(len(pw_df), 1)))
+            fig_h = max(420, len(pw_df) * bar_h + 160)
 
             fig_mirror = go.Figure()
 
-            # GROUP_A bars (drawn on LEFT via negative x trick)
+            # LEFT bars = ↑ GROUP_B = lower in research group (negative x trick)
             fig_mirror.add_trace(go.Bar(
-                name=DIR_A,
-                x=[-n for n in pw_df['A_n']],
+                name=f'↓ {GROUP_A}  (higher in {GROUP_B})',
+                x=[-n for n in pw_df['B_n']],
                 y=pw_df['Pathway'],
                 orientation='h',
-                marker=dict(
-                    color=COLORS[GROUP_A],
-                    line=dict(color='white', width=0.8),
-                ),
-                customdata=pw_df['A_n'].values,
-                hovertemplate=f'<b>%{{y}}</b><br>{DIR_A}: <b>%{{customdata}}</b><extra></extra>',
-                text=[str(n) if n > 0 else '' for n in pw_df['A_n']],
-                textposition='inside',
-                textfont=dict(size=13, color='white'),
-                insidetextanchor='middle',
-            ))
-
-            # GROUP_B bars (drawn on RIGHT)
-            fig_mirror.add_trace(go.Bar(
-                name=DIR_B,
-                x=pw_df['B_n'],
-                y=pw_df['Pathway'],
-                orientation='h',
-                marker=dict(
-                    color=COLORS[GROUP_B],
-                    line=dict(color='white', width=0.8),
-                ),
+                marker=dict(color=COLORS[GROUP_B], line=dict(color='white', width=0.8)),
                 customdata=pw_df['B_n'].values,
-                hovertemplate=f'<b>%{{y}}</b><br>{DIR_B}: <b>%{{customdata}}</b><extra></extra>',
+                hovertemplate=(f'<b>%{{y}}</b><br>'
+                               f'Lower in {GROUP_A}: <b>%{{customdata}}</b><extra></extra>'),
                 text=[str(n) if n > 0 else '' for n in pw_df['B_n']],
                 textposition='inside',
-                textfont=dict(size=13, color='white'),
+                textfont=dict(size=12, color='white'),
                 insidetextanchor='middle',
             ))
 
-            # Total count annotation on right margin
-            for i, row_pw in pw_df.iterrows():
-                if row_pw['Total'] > 0:
-                    fig_mirror.add_annotation(
-                        x=max(pw_df['B_n'].max(), 1) * 1.15,
-                        y=row_pw['Pathway'],
-                        text=f"n={row_pw['Total']}",
-                        showarrow=False,
-                        font=dict(size=10, color='#666'),
-                        xanchor='left',
-                    )
+            # RIGHT bars = ↑ GROUP_A = higher in research group
+            fig_mirror.add_trace(go.Bar(
+                name=f'↑ {GROUP_A}  (lower in {GROUP_B})',
+                x=pw_df['A_n'],
+                y=pw_df['Pathway'],
+                orientation='h',
+                marker=dict(color=COLORS[GROUP_A], line=dict(color='white', width=0.8)),
+                customdata=pw_df['A_n'].values,
+                hovertemplate=(f'<b>%{{y}}</b><br>'
+                               f'Higher in {GROUP_A}: <b>%{{customdata}}</b><extra></extra>'),
+                text=[str(n) if n > 0 else '' for n in pw_df['A_n']],
+                textposition='inside',
+                textfont=dict(size=12, color='white'),
+                insidetextanchor='middle',
+            ))
 
-            # compute symmetric x range
+            # n=total annotation on right margin
             x_max = max(pw_df['A_n'].max(), pw_df['B_n'].max(), 1)
             x_pad = x_max * 0.25
+            for _, row_pw in pw_df.iterrows():
+                fig_mirror.add_annotation(
+                    x=x_max + x_pad * 0.6,
+                    y=row_pw['Pathway'],
+                    text=f"n={row_pw['Total']}",
+                    showarrow=False,
+                    font=dict(size=10, color='#666'),
+                    xanchor='left',
+                )
 
             fig_mirror.update_layout(
                 barmode='relative',
                 title=dict(
-                    text=(f'<b>Metabolites per KEGG Pathway</b>'
+                    text=(f'<b>{GROUP_A} relative to {GROUP_B}</b>'
                           f'<br><span style="font-size:12px;color:#555">'
-                          f'Left ← {DIR_A} &nbsp;|&nbsp; {DIR_B} → Right'
-                          f' &nbsp;|&nbsp; filters: {fc_label}, {pv_label}</span>'),
+                          f'← Lower in {GROUP_A} &nbsp;|&nbsp; Higher in {GROUP_A} →'
+                          f'&nbsp;&nbsp;({fc_label}, {pv_label})'
+                          f'&nbsp;|&nbsp; n = total mapped</span>'),
                     font=dict(size=16, color='#111'),
                     x=0.5, xanchor='center',
                 ),
                 xaxis=dict(
-                    title=dict(text='Number of metabolites', font=dict(size=13)),
+                    title=dict(text='Number of significant metabolites', font=dict(size=13)),
                     tickfont=dict(size=12),
-                    tickangle=0,
                     zeroline=True, zerolinecolor='#222', zerolinewidth=2,
-                    gridcolor='#e8e8e8', gridwidth=1,
-                    range=[-(x_max + x_pad), x_max + x_pad * 3],
-                    tickmode='auto',
-                    nticks=min(11, x_max * 2 + 3),
+                    gridcolor='#e8e8e8',
+                    range=[-(x_max + x_pad), x_max + x_pad * 1.8],
                     tickformat='d',
                     labelalias={str(-v): str(v) for v in range(1, x_max + 2)},
                 ),
-                yaxis=dict(
-                    tickfont=dict(size=12, color='#111'),
-                    automargin=True,
-                ),
+                yaxis=dict(tickfont=dict(size=12, color='#111'), automargin=True),
                 legend=dict(
                     orientation='h', x=0.5, y=-0.15, xanchor='center',
                     font=dict(size=13), bgcolor='rgba(0,0,0,0)',
@@ -972,7 +1092,6 @@ def main():
                 bargap=0.35,
             )
 
-            # subtle alternating row shading
             for i, pathway in enumerate(pw_df['Pathway']):
                 if i % 2 == 0:
                     fig_mirror.add_hrect(
@@ -1177,7 +1296,7 @@ def main():
                          .nlargest(n_heat, '-log10p')['Original_Name'].tolist())
         heat_df = df[df['Original_Name'].isin(top_sig_names)].drop_duplicates('Original_Name').copy()
         if not heat_df.empty:
-            sorted_samp = adhd_cols + control_cols
+            sorted_samp = adhd_cols + extra_cols + control_cols
             sorted_idx  = [sample_cols.index(s) for s in sorted_samp if s in sample_cols]
             heat_vals   = heat_df[sample_cols].apply(pd.to_numeric, errors='coerce').values
             heat_log    = np.log10(np.clip(heat_vals, 1, None))[:,sorted_idx]
@@ -1189,11 +1308,15 @@ def main():
                 hovertemplate='%{y}<br>%{x}<br>log₁₀ intensity: %{z:.2f}<extra></extra>',
                 colorbar=dict(title=dict(text='log₁₀(intensity)', font=dict(size=12))),
             ))
-            fig_heat.add_vrect(x0=-0.5, x1=len(adhd_cols)-0.5,
-                               fillcolor="rgba(192,57,43,0.06)", line_width=0)
-            fig_heat.add_vrect(x0=len(adhd_cols)-0.5,
-                               x1=len(adhd_cols)+len(control_cols)-0.5,
-                               fillcolor="rgba(26,110,168,0.06)", line_width=0)
+            # shade each group band (A=red, extra=grey, B=blue)
+            _n_a, _n_e, _n_b = len(adhd_cols), len(extra_cols), len(control_cols)
+            for _x0, _x1, _fc in [
+                (-0.5, _n_a - 0.5,            "rgba(192,57,43,0.07)"),
+                (_n_a - 0.5, _n_a+_n_e - 0.5, "rgba(150,150,150,0.07)"),
+                (_n_a+_n_e - 0.5, _n_a+_n_e+_n_b - 0.5, "rgba(26,110,168,0.07)"),
+            ]:
+                if _x0 < _x1:
+                    fig_heat.add_vrect(x0=_x0, x1=_x1, fillcolor=_fc, line_width=0)
             fig_heat.update_layout(
                 height=max(500, n_heat * 17),
                 margin=dict(t=50,b=50),
@@ -1303,6 +1426,134 @@ def main():
                 kegg_val = row.get('KEGG_Pathways','')
                 if kegg_val and str(kegg_val) != '-':
                     st.markdown(f"**KEGG Pathways:** {kegg_val}")
+
+
+    # ═════════════════════════════════════════════════════════════════════════
+    # TAB 8 — DOWNLOADS & EXPORTS
+    # ═════════════════════════════════════════════════════════════════════════
+    with tabs[7]:
+        st.markdown("## 📥 Downloads & Exports")
+        st.caption("All exports reflect the current filter settings (FC threshold, p-value, statistical method).")
+
+        ecols = export_cols(df, name_col, fc_col, pval_col)
+        sig = df[df['_direction'] != 'n/s'].copy()
+        up_a  = df[df['_direction'] == DIR_A].copy()
+        up_b  = df[df['_direction'] == DIR_B].copy()
+
+        def dl_row(label: str, data_df: pd.DataFrame, stem: str):
+            c1, c2, c3 = st.columns([3, 1, 1])
+            c1.markdown(f"**{label}** — {len(data_df):,} compounds")
+            c2.download_button(
+                "⬇ CSV", to_csv(data_df[ecols]),
+                file_name=f"{stem}.csv", mime="text/csv",
+                key=f"csv_{stem}", use_container_width=True,
+            )
+            c3.download_button(
+                "⬇ Excel", to_excel(data_df[ecols]),
+                file_name=f"{stem}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key=f"xl_{stem}", use_container_width=True,
+            )
+
+        # ── Core datasets ──────────────────────────────────────────────────
+        st.markdown("### Core datasets")
+        dl_row("All annotated compounds", df, "all_compounds")
+        dl_row(f"Significant compounds (p<{pval_thresh}, |FC|≥{fc_thresh})", sig, "significant_compounds")
+        dl_row(f"↑ {GROUP_A} compounds", up_a, f"up_{GROUP_A.lower()}")
+        dl_row(f"↑ {GROUP_B} compounds", up_b, f"up_{GROUP_B.lower()}")
+
+        st.divider()
+
+        # ── Thematic slices ────────────────────────────────────────────────
+        st.markdown("### Thematic slices")
+
+        lipid_df = sig[sig.get('Main_Categories', pd.Series(dtype=str)).astype(str).str.contains('Lipid|lipid', na=False)] \
+            if 'Main_Categories' in sig.columns else sig.iloc[0:0]
+        kegg_df  = sig[sig['KEGG_Pathways'].astype(str).str.strip().str.replace('-','').str.len() > 0] \
+            if 'KEGG_Pathways' in sig.columns else sig.iloc[0:0]
+        neuro_df = sig[sig['Neuro_Trap'].astype(str).str.strip().str.lower().isin(['yes','true','1'])] \
+            if 'Neuro_Trap' in sig.columns else sig.iloc[0:0]
+        hoc_df   = sig[pd.to_numeric(sig.get('OC_Ratio', pd.Series(dtype=float)), errors='coerce') > 0.4] \
+            if 'OC_Ratio' in sig.columns else sig.iloc[0:0]
+
+        dl_row("Significant lipids", lipid_df, "sig_lipids")
+        dl_row("Significant KEGG-mapped compounds", kegg_df, "sig_kegg_mapped")
+        dl_row("Neuro-active significant compounds", neuro_df, "sig_neuroactive")
+        dl_row("High-oxidation compounds (O/C > 0.4)", hoc_df, "sig_high_oxidation")
+
+        st.divider()
+
+        # ── Full data with sample intensities ─────────────────────────────
+        st.markdown("### Full data with sample intensities")
+        if sample_cols:
+            int_cols = [c for c in ([name_col, fc_col, pval_col, '_direction']
+                                    + [c2 for c2 in EXPORT_BASE if c2 in df.columns and c2 != name_col]
+                                    + sample_cols) if c in df.columns]
+            dl_row("All compounds + raw intensities", df[int_cols], "all_with_intensities")
+            dl_row("Significant compounds + raw intensities", sig[int_cols], "sig_with_intensities")
+        else:
+            st.info("No sample intensity columns detected in the current dataset.")
+
+        st.divider()
+
+        # ── MetaboAnalyst export ───────────────────────────────────────────
+        st.markdown("### MetaboAnalyst Export")
+        st.markdown(
+            "Two files required by [MetaboAnalyst](https://www.metaboanalyst.ca/) "
+            "for statistical analysis and pathway enrichment."
+        )
+
+        if not sample_cols:
+            st.warning("Sample intensity columns not detected — MetaboAnalyst export unavailable.")
+        else:
+            peak_table, meta_table, n_inc, n_exc = build_metaboanalyst(df, sample_cols, grp_norm)
+
+            col_pt, col_mt = st.columns(2)
+            _hdr = 'style="min-height:52px;line-height:1.5;margin-bottom:4px"'
+            with col_pt:
+                warn = (f'<br><small style="color:#888">⚠ {n_exc} compounds excluded '
+                        f'(no recognized identifier).</small>') if n_exc else ''
+                st.markdown(
+                    f'<div {_hdr}><b>Peak Table</b> — {n_inc:,} compounds '
+                    f'with PubChem / HMDB / KEGG ID{warn}</div>',
+                    unsafe_allow_html=True,
+                )
+                st.dataframe(peak_table.head(5), use_container_width=True, height=200)
+                st.download_button(
+                    "⬇ Peak Table CSV (MetaboAnalyst)",
+                    to_csv(peak_table),
+                    file_name="metaboanalyst_peak_table.csv",
+                    mime="text/csv",
+                    key="ma_peak",
+                    use_container_width=True,
+                )
+
+            with col_mt:
+                st.markdown(
+                    f'<div {_hdr}><b>Sample Metadata</b> — '
+                    f'{len(meta_table)} samples × 2 columns</div>',
+                    unsafe_allow_html=True,
+                )
+                st.dataframe(meta_table, use_container_width=True, height=200)
+                st.download_button(
+                    "⬇ Sample Metadata CSV (MetaboAnalyst)",
+                    to_csv(meta_table),
+                    file_name="metaboanalyst_metadata.csv",
+                    mime="text/csv",
+                    key="ma_meta",
+                    use_container_width=True,
+                )
+
+            with st.expander("How to use in MetaboAnalyst"):
+                st.markdown(
+                    f"""
+1. Go to **metaboanalyst.ca → Statistical Analysis → Two-group Comparison**
+2. Upload **Peak Table CSV** as the data file (rows = compounds, columns = samples)
+3. The first column (`PubChem_CID`) contains the identifier — select **PubChem CID** as ID type
+4. Upload **Sample Metadata CSV** for group labels — column `Sample` maps to sample names, `Group` is the class label
+5. For pathway analysis, use **Pathway Analysis** module and upload the same Peak Table
+"""
+                )
 
 
 # ─── Entry point ──────────────────────────────────────────────────────────────
